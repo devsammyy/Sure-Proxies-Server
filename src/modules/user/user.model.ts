@@ -2,8 +2,8 @@ export class UserModel {
   uid: string;
   email: string;
   fullName: string;
-  createdAt: number; // timestamp in milliseconds
-  lastLogin: number; // timestamp in milliseconds
+  createdAt: number;
+  lastLogin: number;
   purchases: any[];
   role: 'user' | 'admin';
 }

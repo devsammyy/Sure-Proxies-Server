@@ -14,8 +14,8 @@ import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CreateUserDTO, UpdateUserDto } from './user.dto';
 import { UserService } from './user.service';
 
-@ApiTags('users')
-@Controller('users')
+@ApiTags('User Modules')
+@Controller('user')
 export class UserController {
   constructor(private readonly userService: UserService) {}
 
@@ -30,7 +30,7 @@ export class UserController {
   @ApiBody({ type: CreateUserDTO }) // Tells Swagger the request body type
   @UsePipes(new ValidationPipe({ transform: true }))
   createUser(@Body() model: CreateUserDTO) {
-    return this.userService.createUser(model);
+    return this.userService.create(model);
   }
 
   @Get('all')

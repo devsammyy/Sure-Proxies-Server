@@ -1,15 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import * as admin from 'firebase-admin';
-import * as firebaseAdmin from 'firebase-admin';
+import { db, dbAuth } from 'src/main';
 import { UserModel, UserRole } from 'src/modules/user/user.model';
 import { CreateUserDTO, UpdateUserDto } from './user.dto';
 
 @Injectable()
 export class UserService {
-  private db = admin.firestore();
-  public async createUser(model: CreateUserDTO): Promise<UserModel> {
+  public async create(model: CreateUserDTO): Promise<UserModel> {
     try {
-      const record = await firebaseAdmin.auth().createUser({
+      const record = await dbAuth.createUser({
         displayName: model.fullName,
         email: model.email,
         password: model.password,
@@ -28,7 +27,7 @@ export class UserService {
         role: UserRole.USER,
       });
 
-      const userDoc = await this.db.collection('users').doc(record.uid).get();
+      const userDoc = await db.collection('users').doc(record.uid).get();
       const data = userDoc.data() as
         | {
             uid: string;
@@ -65,11 +64,11 @@ export class UserService {
   }
 
   async saveUser(userId: string, userData: any): Promise<void> {
-    const userRef = this.db.collection('users').doc(userId);
+    const userRef = db.collection('users').doc(userId);
     await userRef.set(userData);
   }
   public async findAll(): Promise<UserModel[]> {
-    const usersSnapshot = await this.db.collection('users').get();
+    const usersSnapshot = await db.collection('users').get();
 
     return usersSnapshot.docs.map((doc) => {
       const data = doc.data() as
@@ -100,7 +99,7 @@ export class UserService {
   }
 
   async findOne(id: string) {
-    const user = await this.db.collection('users').doc(id).get();
+    const user = await db.collection('users').doc(id).get();
     if (!user.exists) {
       throw new Error('User not found');
     }
@@ -116,7 +115,7 @@ export class UserService {
 
   async remove(id: string) {
     const user = await this.findOne(id);
-    await this.db.collection('users').doc(id).delete();
+    await db.collection('users').doc(id).delete();
     return user;
   }
 }
