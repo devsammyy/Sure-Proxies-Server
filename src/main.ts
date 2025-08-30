@@ -1,9 +1,13 @@
 import { NestFactory } from '@nestjs/core';
+import { ExpressAdapter } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import express from 'express';
 import * as firebaseAdmin from 'firebase-admin';
 import * as fs from 'fs';
 import { AllExceptionsFilter } from 'src/filters/all-exception-filter';
 import { AppModule } from './app.module';
+
+const server = express();
 
 //firebase ;
 const firebaseKeyFilePath = './serviceAccount.json';
@@ -28,10 +32,14 @@ async function bootstrap() {
     .setVersion('1.0')
     .addBearerAuth()
     .build();
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, new ExpressAdapter(server));
+  await app.init();
   const document = SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('', app, document);
   app.useGlobalFilters(new AllExceptionsFilter());
   await app.listen(process.env.PORT ?? 3000);
 }
-bootstrap();
+bootstrap().catch((err) => {
+  console.error('Failed to start application:', err);
+  process.exit(1);
+});
