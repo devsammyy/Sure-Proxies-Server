@@ -3,8 +3,8 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 
 export function setupSwagger(app: INestApplication) {
   const config = new DocumentBuilder()
-    .setTitle('API Docs')
-    .setDescription('My API with Auth')
+    .setTitle('Sure Proxy API Docs')
+    .setDescription('Sure proxy api')
     .setVersion('1.0')
     .addBearerAuth(
       {
