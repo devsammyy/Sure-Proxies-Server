@@ -1,35 +1,19 @@
 import { NestFactory } from '@nestjs/core';
-
+import * as firebaseAdmin from 'firebase-admin';
 import { AllExceptionsFilter } from 'src/filters/all-exception-filter';
 import { setupSwagger } from 'src/swagger';
 import { AppModule } from './app.module';
 
-import * as admin from 'firebase-admin';
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+const filePath =
+  process.env.SERVICE_ACCOUNT_PATH || '/etc/secrets/serviceAccount.json';
 
-function getServiceAccount() {
-  const filePath =
-    process.env.NODE_ENV === 'production'
-      ? '/etc/secrets/serviceAccount.json' // Render path
-      : join(__dirname, '..', 'serviceAccount.json'); // Local dev path
+firebaseAdmin.initializeApp({
+  credential: firebaseAdmin.credential.cert(filePath),
+});
 
-  if (!existsSync(filePath)) {
-    throw new Error('Service account file not found at ' + filePath);
-  }
-
-  return JSON.parse(readFileSync(filePath, 'utf8'));
-}
-
-if (admin.apps.length === 0) {
-  admin.initializeApp({
-    credential: admin.credential.cert(getServiceAccount()),
-  });
-}
-
-export const db = admin.firestore();
-export const dbFireStore = admin.firestore;
-export const dbAuth = admin.auth();
+export const db = firebaseAdmin.firestore();
+export const dbFireStore = firebaseAdmin.firestore;
+export const dbAuth = firebaseAdmin.auth();
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
