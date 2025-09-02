@@ -1,7 +1,9 @@
 import { Injectable } from '@nestjs/common';
 import { ApiClient } from 'src/common/api/api-client';
 import {
+  AuthenticationTypeDto,
   BandwidthPriceAfterCalcDto,
+  ProtocolDto,
   ProxyDto,
 } from 'src/modules/proxy/proxy.dto';
 
@@ -24,11 +26,21 @@ export class ProxyService {
     }
   }
 
+  async getProxyById(id: any): Promise<ProtocolDto | null> {
+    try {
+      const proxies = await this.apiClient.get<ProtocolDto | null>(`/${id}`);
+      return proxies || null;
+    } catch (error) {
+      console.error('Error fetching proxy: ', error);
+      return null;
+    }
+  }
+
   async cancelProxyById(id: string): Promise<void> {
     try {
       await this.apiClient.get<void>(`/${id}/cancel`);
     } catch (error) {
-      console.error('Error fetching proxies: ', error);
+      console.error('Error cancelling proxy: ', error);
     }
   }
 
@@ -40,7 +52,7 @@ export class ProxyService {
       );
       return response || null;
     } catch (error) {
-      console.error('Error fetching proxies: ', error);
+      console.error('Error extending proxy period: ', error);
       return null;
     }
   }
@@ -70,20 +82,66 @@ export class ProxyService {
       );
       return response || null;
     } catch (error) {
-      console.error('Failed to buy bandwidth: ', error);
+      console.error('Failed to whitelist the ip: ', error);
       return null;
     }
   }
 
-  async getProtocols(id: any): Promise<ProxyDto | null> {
+  async getProtocols(id: any): Promise<ProtocolDto | null> {
     try {
-      const proxies = await this.apiClient.get<ProxyDto | null>(
+      const proxies = await this.apiClient.get<ProtocolDto | null>(
         `/${id}/change-protocol`,
       );
       return proxies || null;
     } catch (error) {
-      console.error('Error fetching proxies: ', error);
+      console.error('Error fetching protocol: ', error);
       return null;
+    }
+  }
+
+  async changeProtocol(id: string, data: any): Promise<void> {
+    try {
+      await this.apiClient.post<void>(`/${id}/change-protocol`, data);
+    } catch (error) {
+      console.error('Failed to changing protocol: ', error);
+    }
+  }
+
+  async rotateIp(id: string, data: any): Promise<string | null> {
+    try {
+      const response = await this.apiClient.post<string | null>(
+        `/${id}/rotate-ip`,
+        data,
+      );
+      return response || null;
+    } catch (error) {
+      console.error('Failed to rotate IP: ', error);
+      return null;
+    }
+  }
+
+  async getAuthenticationMethods(
+    id: any,
+  ): Promise<AuthenticationTypeDto | null> {
+    try {
+      const proxies = await this.apiClient.get<AuthenticationTypeDto | null>(
+        `/${id}/change-authentication-type`,
+      );
+      return proxies || null;
+    } catch (error) {
+      console.error('Error fetching method: ', error);
+      return null;
+    }
+  }
+
+  async changeAuthenticationMethod(id: string, data: any): Promise<void> {
+    try {
+      await this.apiClient.post<void>(
+        `/${id}/change-authentication-type`,
+        data,
+      );
+    } catch (error) {
+      console.error('Failed to changing auth method: ', error);
     }
   }
 }

@@ -83,3 +83,26 @@ export class BandwidthPriceAfterCalcDto {
   @IsInt()
   discount: number;
 }
+
+export class ProtocolDto {
+  @IsEnum(['HTTP', 'HTTPS', 'SOCKS5'], {
+    message: 'currentType must be one of: HTTP, HTTPS, SOCKS5',
+  })
+  currentType: string;
+
+  @IsArray()
+  @IsEnum(['HTTP', 'SOCKS5'], { each: true })
+  availableTypes: string[];
+}
+
+export class AuthenticationTypeDto {
+  @IsEnum(['IP_WHITELIST', 'USERNAME_PASSWORD'], {
+    message:
+      'currentAuthenticationType must be one of: IP_WHITELIST, USERNAME_PASSWORD',
+  })
+  currentAuthenticationType: string;
+
+  @IsArray()
+  @IsEnum(['IP_WHITELIST', 'USERNAME_PASSWORD'], { each: true })
+  availableAuthenticationTypes: string[];
+}
