@@ -6,14 +6,27 @@ import { setupSwagger } from 'src/swagger';
 import { AppModule } from './app.module';
 
 //firebase ;
-const firebaseKeyFilePath = './serviceAccount.json';
-const firebaseServiceAccount = JSON.parse(
-  fs.readFileSync(firebaseKeyFilePath).toString(),
-) as firebaseAdmin.ServiceAccount;
+
+let serviceAccount: firebaseAdmin.ServiceAccount;
+
+if (fs.existsSync('./serviceAccount.json')) {
+  // Local dev
+  serviceAccount = JSON.parse(
+    fs.readFileSync('./serviceAccount.json', 'utf8'),
+  ) as firebaseAdmin.ServiceAccount;
+} else if (fs.existsSync('/etc/secrets/serviceAccount.json')) {
+  // Production (Render / Docker secret mount)
+  serviceAccount = JSON.parse(
+    fs.readFileSync('/etc/secrets/serviceAccount.json', 'utf8'),
+  ) as firebaseAdmin.ServiceAccount;
+} else {
+  throw new Error('Service account file not found.');
+}
+
 if (firebaseAdmin.apps.length === 0) {
-  console.log('Initialize Firebase Application.');
+  console.log('Initializing Firebase Admin...');
   firebaseAdmin.initializeApp({
-    credential: firebaseAdmin.credential.cert(firebaseServiceAccount),
+    credential: firebaseAdmin.credential.cert(serviceAccount),
   });
 }
 
