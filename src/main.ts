@@ -5,27 +5,20 @@ import { setupSwagger } from 'src/swagger';
 import { AppModule } from './app.module';
 
 import * as admin from 'firebase-admin';
-import * as fs from 'fs';
-import * as path from 'path';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 
 function getServiceAccount() {
-  // Render mounts secret files under /etc/secrets
-  const renderSecretPath = '/etc/secrets/serviceAccount.json';
-  const localSecretPath = path.join(__dirname, '../serviceAccount.json');
+  const filePath =
+    process.env.NODE_ENV === 'production'
+      ? '/etc/secrets/serviceAccount.json' // Render path
+      : join(__dirname, '..', 'serviceAccount.json'); // Local dev path
 
-  if (fs.existsSync(renderSecretPath)) {
-    console.log('Using Render service account');
-    return JSON.parse(
-      fs.readFileSync(renderSecretPath, 'utf8'),
-    ) as admin.ServiceAccount;
-  } else if (fs.existsSync(localSecretPath)) {
-    console.log('Using local service account');
-    return JSON.parse(
-      fs.readFileSync(localSecretPath, 'utf8'),
-    ) as admin.ServiceAccount;
-  } else {
-    throw new Error('Service account file not found');
+  if (!existsSync(filePath)) {
+    throw new Error('Service account file not found at ' + filePath);
   }
+
+  return JSON.parse(readFileSync(filePath, 'utf8'));
 }
 
 if (admin.apps.length === 0) {
