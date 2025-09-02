@@ -1,0 +1,83 @@
+import axios from 'axios';
+
+export class ApiClient {
+  apiKey = process.env.PROXY_CHEAP_API_KEY;
+  apiSecretKey = process.env.PROXY_CHEAP_API_SECRET;
+
+  constructor(private readonly baseUrl: string) {}
+
+  async get<T>(
+    endpoint: string,
+    params?: Record<string, any>,
+  ): Promise<T | null> {
+    try {
+      const response = await axios.get<T>(`${this.baseUrl}${endpoint}`, {
+        params,
+        headers: {
+          'X-Api-Key': this.apiKey,
+          'X-Api-Secret': this.apiSecretKey,
+        },
+      });
+      if (response.status !== 200) {
+        throw new Error(`Failed request: ${response.status}`);
+      }
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching ${endpoint}: `, error);
+      return null;
+    }
+  }
+
+  async post<T>(endpoint: string, data?: any): Promise<T | null> {
+    try {
+      const response = await axios.post<T>(`${this.baseUrl}${endpoint}`, data, {
+        headers: {
+          'X-Api-Key': this.apiKey,
+          'X-Api-Secret': this.apiSecretKey,
+        },
+      });
+      if (response.status !== 201) {
+        throw new Error(`Failed to create: ${response.status}`);
+      }
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching ${endpoint}: `, error);
+      return null;
+    }
+  }
+
+  async put<T>(endpoint: string, data?: any): Promise<T | null> {
+    try {
+      const response = await axios.put<T>(`${this.baseUrl}${endpoint}`, data, {
+        headers: {
+          'X-Api-Key': this.apiKey,
+          'X-Api-Secret': this.apiSecretKey,
+        },
+      });
+      if (response.status !== 200) {
+        throw new Error(`Failed to patch: ${response.status}`);
+      }
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching ${endpoint}: `, error);
+      return null;
+    }
+  }
+  async delete<T>(endpoint: string): Promise<T | null> {
+    try {
+      const response = await axios.delete<T>(`${this.baseUrl}${endpoint}`, {
+        headers: {
+          'X-Api-Key': this.apiKey,
+          'X-Api-Secret': this.apiSecretKey,
+        },
+      });
+      if (response.status !== 200) {
+        throw new Error(`Failed to patch: ${response.status}`);
+      }
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching ${endpoint}: `, error);
+      return null;
+    }
+  }
+}
