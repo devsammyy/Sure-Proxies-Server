@@ -1,38 +1,42 @@
 import { NestFactory } from '@nestjs/core';
-import * as firebaseAdmin from 'firebase-admin';
-import * as fs from 'fs';
+
 import { AllExceptionsFilter } from 'src/filters/all-exception-filter';
 import { setupSwagger } from 'src/swagger';
 import { AppModule } from './app.module';
 
-//firebase ;
+import * as admin from 'firebase-admin';
+import * as fs from 'fs';
+import * as path from 'path';
 
-let serviceAccount: firebaseAdmin.ServiceAccount;
+function getServiceAccount() {
+  // Render mounts secret files under /etc/secrets
+  const renderSecretPath = '/etc/secrets/serviceAccount.json';
+  const localSecretPath = path.join(__dirname, '../serviceAccount.json');
 
-if (fs.existsSync('./serviceAccount.json')) {
-  // Local dev
-  serviceAccount = JSON.parse(
-    fs.readFileSync('./serviceAccount.json', 'utf8'),
-  ) as firebaseAdmin.ServiceAccount;
-} else if (fs.existsSync('/etc/secrets/serviceAccount.json')) {
-  // Production (Render / Docker secret mount)
-  serviceAccount = JSON.parse(
-    fs.readFileSync('/etc/secrets/serviceAccount.json', 'utf8'),
-  ) as firebaseAdmin.ServiceAccount;
-} else {
-  throw new Error('Service account file not found.');
+  if (fs.existsSync(renderSecretPath)) {
+    console.log('Using Render service account');
+    return JSON.parse(
+      fs.readFileSync(renderSecretPath, 'utf8'),
+    ) as admin.ServiceAccount;
+  } else if (fs.existsSync(localSecretPath)) {
+    console.log('Using local service account');
+    return JSON.parse(
+      fs.readFileSync(localSecretPath, 'utf8'),
+    ) as admin.ServiceAccount;
+  } else {
+    throw new Error('Service account file not found');
+  }
 }
 
-if (firebaseAdmin.apps.length === 0) {
-  console.log('Initializing Firebase Admin...');
-  firebaseAdmin.initializeApp({
-    credential: firebaseAdmin.credential.cert(serviceAccount),
+if (admin.apps.length === 0) {
+  admin.initializeApp({
+    credential: admin.credential.cert(getServiceAccount()),
   });
 }
 
-export const db = firebaseAdmin.firestore();
-export const dbFireStore = firebaseAdmin.firestore;
-export const dbAuth = firebaseAdmin.auth();
+export const db = admin.firestore();
+export const dbFireStore = admin.firestore;
+export const dbAuth = admin.auth();
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
