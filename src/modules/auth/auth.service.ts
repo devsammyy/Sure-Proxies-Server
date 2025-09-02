@@ -1,7 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
 import { Request } from 'express';
-import { dbAuth } from 'src/main';
+import { db, dbAuth } from 'src/main';
 import { TokenResponse } from 'src/modules/auth/auth.model';
 import { LoginDto } from './auth.dto';
 
@@ -13,9 +13,9 @@ export class AuthService {
       const { idToken, refreshToken, expiresIn } =
         await this.signInWithEmailAndPassword(email, password);
       return { idToken, refreshToken, expiresIn };
-    } catch (error: unknown) {
-      console.error(error, 'Error logging in user');
-      throw error;
+    } catch (error: any) {
+      console.error(error?.response?.data || error, 'Error logging in user');
+      throw new UnauthorizedException('Invalid credentials');
     }
   }
 
@@ -24,21 +24,11 @@ export class AuthService {
     password: string,
   ): Promise<{ idToken: string; refreshToken: string; expiresIn: string }> {
     const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${process.env.FIREBASE_API_KEY}`;
-    const response: {
-      idToken: string;
-      refreshToken: string;
-      expiresIn: string;
-    } = await this.sendPostRequest(url, {
+    return await this.sendPostRequest(url, {
       email,
       password,
       returnSecureToken: true,
     });
-    // Explicitly extract and return only the expected fields
-    return {
-      idToken: response.idToken,
-      refreshToken: response.refreshToken,
-      expiresIn: response.expiresIn,
-    };
   }
 
   private async sendPostRequest<T>(url: string, data: any): Promise<T> {
@@ -51,27 +41,45 @@ export class AuthService {
       return response.data;
     } catch (error) {
       console.error(error, 'Error sending POST request');
-      throw error;
+      throw new UnauthorizedException('Authentication failed');
     }
   }
 
   async validateRequest(req: Request): Promise<boolean> {
     const authHeader = req.headers['authorization'];
+
     if (!authHeader) {
-      console.log('Authorization header not provided');
-      return false;
+      throw new UnauthorizedException('Authorization header missing');
     }
+
     const [bearer, token] = authHeader.split(' ');
+
     if (bearer !== 'Bearer' || !token) {
-      console.log("Invalid authorization format. Expected 'Bearer <token>'.");
+      throw new UnauthorizedException(
+        "Invalid authorization format. Use 'Bearer <token>'",
+      );
     }
 
     try {
-      await dbAuth.verifyIdToken(token);
+      const decodedToken = await dbAuth.verifyIdToken(token);
+      const userDoc = await db.collection('users').doc(decodedToken.uid).get();
+
+      if (!userDoc.exists) {
+        throw new UnauthorizedException('User not found');
+      }
+
+      const docData = userDoc.data() as { role?: string } | undefined;
+      const userData = {
+        uid: decodedToken.uid,
+        email: decodedToken.email,
+        role: docData?.role ?? 'user',
+      };
+
+      (req as any).user = userData;
       return true;
     } catch (error) {
-      console.error(error, 'Error verifying token: ', error);
-      return false;
+      console.error('Error verifying token: ', error);
+      throw new UnauthorizedException('Invalid or expired token');
     }
   }
 }

@@ -11,6 +11,8 @@ import {
 } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 
+import { ApAuthGuard } from 'src/modules/auth/auth-guard.decorator';
+import { UserRole } from 'src/modules/user/user.model';
 import { CreateUserDTO, UpdateUserDto } from './user.dto';
 import { UserService } from './user.service';
 
@@ -39,6 +41,7 @@ export class UserController {
     description: 'Fetch all users from Firestore.',
   })
   @ApiResponse({ status: 200, description: 'List of users.' })
+  @ApAuthGuard(UserRole.ADMIN)
   findAll() {
     return this.userService.findAll();
   }
@@ -61,6 +64,7 @@ export class UserController {
   })
   @ApiResponse({ status: 200, description: 'User updated.' })
   @ApiResponse({ status: 404, description: 'User not found.' })
+  @ApAuthGuard(UserRole.ADMIN)
   update(@Param('id') id: string, @Body() updateUserDto: UpdateUserDto) {
     return this.userService.update(id, updateUserDto);
   }
@@ -72,6 +76,7 @@ export class UserController {
   })
   @ApiResponse({ status: 200, description: 'User deleted.' })
   @ApiResponse({ status: 404, description: 'User not found.' })
+  @ApAuthGuard(UserRole.ADMIN)
   remove(@Param('id') id: string) {
     return this.userService.remove(id);
   }

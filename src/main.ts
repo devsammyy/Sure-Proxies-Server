@@ -1,8 +1,8 @@
 import { NestFactory } from '@nestjs/core';
-import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import * as firebaseAdmin from 'firebase-admin';
 import * as fs from 'fs';
 import { AllExceptionsFilter } from 'src/filters/all-exception-filter';
+import { setupSwagger } from 'src/swagger';
 import { AppModule } from './app.module';
 
 //firebase ;
@@ -23,15 +23,7 @@ export const dbAuth = firebaseAdmin.auth();
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-
-  const config = new DocumentBuilder()
-    .setTitle('Sure Proxy Server')
-    .setDescription('API documentation for Sure Proxy Server')
-    .setVersion('1.0')
-    .addBearerAuth()
-    .build();
-  const document = SwaggerModule.createDocument(app, config);
-  SwaggerModule.setup('api-docs', app, document);
+  setupSwagger(app);
   app.useGlobalFilters(new AllExceptionsFilter());
   await app.listen(process.env.PORT ?? 3000);
 }
