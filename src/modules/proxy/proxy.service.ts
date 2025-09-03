@@ -3,6 +3,7 @@ import { ApiClient } from 'src/common/api/api-client';
 import {
   AuthenticationTypeDto,
   BandwidthPriceAfterCalcDto,
+  ExtendProxyDtoInput,
   ProtocolDto,
   ProxyDto,
 } from 'src/modules/proxy/proxy.dto';
@@ -44,7 +45,10 @@ export class ProxyService {
     }
   }
 
-  async extendProxyPeriod(id: string, data: any): Promise<ProxyDto | null> {
+  async extendProxyPeriod(
+    id: string,
+    data: ExtendProxyDtoInput,
+  ): Promise<ProxyDto | null> {
     try {
       const response = await this.apiClient.post<ProxyDto>(
         `/${id}/extend-period`,

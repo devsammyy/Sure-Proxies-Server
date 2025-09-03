@@ -106,3 +106,10 @@ export class AuthenticationTypeDto {
   @IsEnum(['IP_WHITELIST', 'USERNAME_PASSWORD'], { each: true })
   availableAuthenticationTypes: string[];
 }
+
+export class ExtendProxyDtoInput {
+  @IsString({
+    message: 'ProxyInMonth',
+  })
+  periodInMonths: string;
+}

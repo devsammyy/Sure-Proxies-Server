@@ -8,14 +8,10 @@ import {
   Query,
   Req,
 } from '@nestjs/common';
-import {
-  ApiBearerAuth,
-  ApiBody,
-  ApiOperation,
-  ApiResponse,
-  ApiTags,
-} from '@nestjs/swagger';
+import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
+import { ApAuthGuard } from 'src/modules/auth/auth-guard.decorator';
+import { UserRole } from 'src/modules/user/user.model';
 import { ProxyOrderDto, PurchaseOrderDto } from './order.dto';
 import { ProxyOrderService } from './order.service';
 
@@ -31,7 +27,6 @@ interface AuthenticatedRequest extends Request {
 
 // @ApAuthGuard()
 @ApiTags('Proxy Order')
-@ApiBearerAuth()
 @Controller('proxy_order')
 export class ProxyOrderController {
   constructor(private readonly proxyOrderService: ProxyOrderService) {}
@@ -43,7 +38,6 @@ export class ProxyOrderController {
     description: 'List of available proxies',
     type: [ProxyOrderService],
   })
-  @ApiBearerAuth()
   async getAvailableProxies(
     @Query('country') country: string,
   ): Promise<ProxyOrderDto[]> {
@@ -101,6 +95,7 @@ export class ProxyOrderController {
 
   @Post('purchase')
   @HttpCode(201)
+  @ApAuthGuard(UserRole.USER)
   @ApiOperation({ summary: 'Purchase a proxy service' })
   @ApiBody({
     schema: {
@@ -135,7 +130,16 @@ export class ProxyOrderController {
     @Req() req: AuthenticatedRequest,
     @Body('serviceId') serviceId: string,
     @Body('planId') planId: string,
-    @Body() options: any,
+    @Body()
+    options: {
+      quantity?: number;
+      period?: { unit: string; value: number };
+      autoExtend?: { isEnabled: boolean; traffic?: number };
+      traffic?: number;
+      country?: string;
+      ispId?: string;
+      couponCode?: string;
+    },
   ): Promise<PurchaseOrderDto> {
     const userId = req.user.uid;
     return this.proxyOrderService.purchaseProxy(
@@ -147,6 +151,7 @@ export class ProxyOrderController {
   }
 
   @Get('my-purchases')
+  @ApAuthGuard(UserRole.USER)
   @ApiOperation({ summary: 'Get all purchases of the logged-in user' })
   async getMyPurchases(
     @Req() req: AuthenticatedRequest,
