@@ -20,10 +20,9 @@ export function setupSwagger(app: INestApplication) {
 
   const document = SwaggerModule.createDocument(app, config);
 
-  // 👇 This applies bearerAuth globally
   SwaggerModule.setup('api', app, document, {
     swaggerOptions: {
-      persistAuthorization: true, // keeps the token after refresh
+      persistAuthorization: true,
     },
   });
 }

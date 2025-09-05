@@ -63,6 +63,7 @@ export class ApiClient {
       return null;
     }
   }
+
   async delete<T>(endpoint: string): Promise<T | null> {
     try {
       const response = await axios.delete<T>(`${this.baseUrl}${endpoint}`, {
