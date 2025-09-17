@@ -3,6 +3,8 @@ import axios from 'axios';
 export class ApiClient {
   apiKey = process.env.PROXY_CHEAP_API_KEY;
   apiSecretKey = process.env.PROXY_CHEAP_API_SECRET;
+  paymentPointSecretKey = process.env.PAYMENTPOINT_SECRET;
+  paymentPointApiKey = process.env.PAYMENTPOINT_APIKEY;
 
   constructor(private readonly baseUrl: string) {}
 
@@ -74,6 +76,25 @@ export class ApiClient {
       });
       if (response.status !== 200) {
         throw new Error(`Failed to patch: ${response.status}`);
+      }
+      return response.data;
+    } catch (error) {
+      console.error(`Error fetching ${endpoint}: `, error);
+      return null;
+    }
+  }
+
+  async postPaymentPoint<T>(endpoint: string, data?: any): Promise<T | null> {
+    try {
+      const response = await axios.post<T>(`${this.baseUrl}${endpoint}`, data, {
+        headers: {
+          Authorization: `Bearer ${this.paymentPointSecretKey}`,
+          'Content-Type': 'application/json',
+          'api-key': this.paymentPointApiKey,
+        },
+      });
+      if (response.status !== 201) {
+        throw new Error(`Failed to create: ${response.status}`);
       }
       return response.data;
     } catch (error) {
