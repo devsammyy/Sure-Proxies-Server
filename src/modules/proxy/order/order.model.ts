@@ -34,3 +34,31 @@ export interface ServiceDetailsResponse {
   isps: IspsByCountry;
   periods: Periods;
 }
+
+export interface PendingOptions {
+  quantity?: number;
+  period?: { unit: 'months' | 'days' | 'years'; value: number };
+  autoExtend?: { isEnabled: boolean };
+  traffic?: number;
+  country?: string;
+  ispId?: string;
+  couponCode?: string;
+}
+
+export interface PendingData {
+  userId: string;
+  serviceId: string;
+  planId: string;
+  pricePaid: number;
+  options: PendingOptions;
+}
+
+export interface TxDoc {
+  finalized?: boolean;
+}
+
+export type FinalizeTxResult =
+  | { status: 'no_pending' }
+  | { status: 'no_tx' }
+  | { status: 'already_finalized' }
+  | { status: 'ok'; pending: PendingData; txData: TxDoc };
