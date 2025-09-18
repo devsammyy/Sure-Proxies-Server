@@ -5,9 +5,9 @@ import { AllExceptionsFilter } from 'src/common/filters/all-exception-filter';
 import { setupSwagger } from 'src/swagger';
 import { AppModule } from './app.module';
 
-// const filePath = process.env.SERVICE_ACCOUNT_PATH || './serviceAccount.json';
-const filePath =
-  process.env.SERVICE_ACCOUNT_PATH || '/etc/secrets/serviceAccount.json';
+const filePath = process.env.SERVICE_ACCOUNT_PATH || './serviceAccount.json';
+// const filePath =
+//   process.env.SERVICE_ACCOUNT_PATH || '/etc/secrets/serviceAccount.json';
 
 firebaseAdmin.initializeApp({
   credential: firebaseAdmin.credential.cert(filePath),
