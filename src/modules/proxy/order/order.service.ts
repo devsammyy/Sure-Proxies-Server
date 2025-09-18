@@ -4,16 +4,22 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import axios from 'axios';
 import { db, dbFireStore } from 'src/main';
 import {
+  FinalizeTxResult,
+  PendingData,
   PriceResponse,
   ServiceDetailsResponse,
+  TxDoc,
 } from 'src/modules/proxy/order/order.model';
+import { CreateTransactionDto } from 'src/modules/transaction/transaction.dto';
+import { Transaction } from 'src/modules/transaction/transaction.model';
+import { TransactionsService } from 'src/modules/transaction/transaction.service';
 import { ProxyOrderDto, PurchaseOrderDto } from './order.dto';
 
 @Injectable()
 export class ProxyOrderService {
   private readonly apiBaseUrl = 'https://api.proxy-cheap.com/v2/order';
 
-  constructor() {}
+  constructor(private readonly transactionsService: TransactionsService) {}
 
   /** Fetch pricing config from Firestore */
   private async getPricingConfig() {
@@ -165,65 +171,231 @@ export class ProxyOrderService {
   }
 
   /** Purchase a proxy (full API compliance) */
+  // async purchaseProxy(
+  //   userId: string,
+  //   serviceId: string,
+  //   planId: string,
+  //   options: {
+  //     quantity?: number;
+  //     period?: { unit: string; value: number };
+  //     autoExtend?: { isEnabled: boolean; traffic?: number };
+  //     traffic?: number;
+  //     country?: string;
+  //     ispId?: string;
+  //     couponCode?: string;
+  //   } = {},
+  // ): Promise<PurchaseOrderDto> {
+  //   try {
+  //     const pricingConfig = await this.getPricingConfig();
+
+  //     // 1. Fetch price
+  //     const priceData = await this.getPrice(
+  //       serviceId,
+  //       planId,
+  //       options.country || 'US',
+  //       options.quantity ?? 1,
+  //       options.period ?? { unit: 'months', value: 1 },
+  //     );
+  //     const apiPrice = priceData.finalPrice;
+  //     const priceWithMarkup = this.applyMarkup(
+  //       apiPrice,
+  //       serviceId,
+  //       pricingConfig,
+  //     );
+
+  //     // 2. Execute order
+  //     const executeResponse = await axios.post(
+  //       `${this.apiBaseUrl}/${serviceId}/execute`,
+  //       {
+  //         planId,
+  //         quantity: options.quantity ?? 1,
+  //         period: options.period ?? { unit: 'months', value: 1 },
+  //         autoExtend: options.autoExtend ?? { isEnabled: true },
+  //         traffic: options.traffic ?? 1,
+  //         country: options.country,
+  //         ispId: options.ispId,
+  //         couponCode: options.couponCode,
+  //       },
+  //       {
+  //         headers: {
+  //           'X-Api-Key': process.env.PROXY_API_KEY,
+  //           'X-Api-Secret': process.env.PROXY_API_SECRET,
+  //         },
+  //       },
+  //     );
+
+  //     // 3. Save purchase to Firestore
+  //     const purchase: PurchaseOrderDto = {
+  //       userId,
+  //       proxyServiceId: serviceId,
+  //       proxyPlanId: planId,
+  //       pricePaid: priceWithMarkup,
+  //       status: 'active',
+  //       createdAt: new Date(),
+  //       details: executeResponse.data,
+  //     };
+
+  //     const purchaseRef = await db.collection('purchases').add(purchase);
+
+  //     await db
+  //       .collection('users')
+  //       .doc(userId)
+  //       .update({
+  //         purchases: dbFireStore.FieldValue.arrayUnion(purchaseRef.id),
+  //       });
+
+  //     return purchase;
+  //   } catch (error) {
+  //     console.error(error);
+  //     throw new HttpException('Purchase failed', HttpStatus.BAD_GATEWAY);
+  //   }
+  // }
+
   async purchaseProxy(
     userId: string,
     serviceId: string,
     planId: string,
     options: {
+      country?: string;
       quantity?: number;
       period?: { unit: string; value: number };
-      autoExtend?: { isEnabled: boolean; traffic?: number };
+      autoExtend?: { isEnabled?: boolean; traffic?: number };
       traffic?: number;
-      country?: string;
       ispId?: string;
       couponCode?: string;
     } = {},
-  ): Promise<PurchaseOrderDto> {
+  ): Promise<{ transactionId: string; amount: number }> {
     try {
       const pricingConfig = await this.getPricingConfig();
-
-      // 1. Fetch price
       const priceData = await this.getPrice(
         serviceId,
         planId,
-        options.country || 'US',
+        options.country ?? 'US',
         options.quantity ?? 1,
         options.period ?? { unit: 'months', value: 1 },
       );
-      const apiPrice = priceData.finalPrice;
+      const apiPrice = priceData?.finalPrice ?? priceData?.unitPrice ?? 0;
       const priceWithMarkup = this.applyMarkup(
         apiPrice,
         serviceId,
         pricingConfig,
       );
 
-      // 2. Execute order
-      const executeResponse = await axios.post(
-        `${this.apiBaseUrl}/${serviceId}/execute`,
+      // create PENDING transaction (reference will be set to id by TransactionsService.create)
+      const createDto: CreateTransactionDto = {
+        type: 'DEPOSIT',
+        amount: priceWithMarkup,
+        reference: undefined,
+      };
+
+      const transaction: Transaction = await this.transactionsService.create(
+        userId,
+        createDto,
+      );
+
+      // save pending purchase keyed by transaction id
+      const pending = {
+        userId,
+        serviceId,
+        planId,
+        options,
+        pricePaid: priceWithMarkup,
+        createdAt: new Date(),
+      };
+      await db.collection('pending_purchases').doc(transaction.id).set(pending);
+
+      return { transactionId: transaction.id, amount: priceWithMarkup };
+    } catch (error) {
+      console.error('purchaseProxy error:', error);
+      throw new HttpException(
+        'Purchase initialization failed',
+        HttpStatus.BAD_GATEWAY,
+      );
+    }
+  }
+
+  /**
+   * finalizePurchase: idempotent.
+   * - uses Firestore transaction to set `finalized` flag so only one process executes the external API
+   * - if finalized is already true -> return early
+   */
+  async finalizePurchase(
+    transactionId: string,
+  ): Promise<PurchaseOrderDto | null> {
+    const pendingRef = db.collection('pending_purchases').doc(transactionId);
+    const txRef = db.collection('transactions').doc(transactionId);
+
+    try {
+      // atomic check+set via runTransaction
+      const result = await db.runTransaction<FinalizeTxResult>(async (t) => {
+        const pendingSnap = await t.get(pendingRef);
+        if (!pendingSnap.exists) {
+          return { status: 'no_pending' };
+        }
+        const pending = pendingSnap.data() as PendingData;
+
+        // fetch transaction doc
+        const txSnap = await t.get(txRef);
+        if (!txSnap.exists) {
+          return { status: 'no_tx' };
+        }
+        const txData = txSnap.data() as TxDoc;
+
+        // If transaction already finalized (prevent duplicates)
+        if (txData.finalized) {
+          return { status: 'already_finalized' };
+        }
+
+        // mark transaction as finalized (so concurrent requests stop here)
+        t.update(txRef, { finalized: true, finalizedAt: new Date() });
+
+        // return pending for the outer scope to use
+        return { status: 'ok', pending, txData };
+      });
+
+      if (result.status === 'no_pending') {
+        console.warn('No pending purchase for transaction', transactionId);
+        return null;
+      }
+      if (result.status === 'no_tx') {
+        throw new Error(
+          'Transaction doc missing for finalizePurchase: ' + transactionId,
+        );
+      }
+      if (result.status === 'already_finalized') {
+        console.log('finalizePurchase already ran for', transactionId);
+        return null;
+      }
+
+      const { pending } = result;
+
+      // Execute the external proxy API (outside transaction)
+      const executeResponse = await axios.post<Record<string, unknown>>(
+        `${this.apiBaseUrl}/${pending.serviceId}/execute`,
         {
-          planId,
-          quantity: options.quantity ?? 1,
-          period: options.period ?? { unit: 'months', value: 1 },
-          autoExtend: options.autoExtend ?? { isEnabled: true },
-          traffic: options.traffic ?? 1,
-          country: options.country,
-          ispId: options.ispId,
-          couponCode: options.couponCode,
+          planId: pending.planId,
+          quantity: pending.options.quantity ?? 1,
+          period: pending.options.period ?? { unit: 'months', value: 1 },
+          autoExtend: pending.options.autoExtend ?? { isEnabled: true },
+          traffic: pending.options.traffic ?? 1,
+          country: pending.options.country,
+          ispId: pending.options.ispId,
+          couponCode: pending.options.couponCode,
         },
         {
           headers: {
-            'X-Api-Key': process.env.PROXY_API_KEY,
-            'X-Api-Secret': process.env.PROXY_API_SECRET,
+            'X-Api-Key': process.env.PROXY_API_KEY as string,
+            'X-Api-Secret': process.env.PROXY_API_SECRET as string,
           },
         },
       );
 
-      // 3. Save purchase to Firestore
+      // construct and save purchase
       const purchase: PurchaseOrderDto = {
-        userId,
-        proxyServiceId: serviceId,
-        proxyPlanId: planId,
-        pricePaid: priceWithMarkup,
+        userId: pending.userId,
+        proxyServiceId: pending.serviceId,
+        proxyPlanId: pending.planId,
+        pricePaid: pending.pricePaid,
         status: 'active',
         createdAt: new Date(),
         details: executeResponse.data,
@@ -231,17 +403,32 @@ export class ProxyOrderService {
 
       const purchaseRef = await db.collection('purchases').add(purchase);
 
+      // attach purchase id to user document
       await db
         .collection('users')
-        .doc(userId)
+        .doc(pending.userId) // now typed as string
         .update({
           purchases: dbFireStore.FieldValue.arrayUnion(purchaseRef.id),
         });
 
+      // remove pending doc
+      await pendingRef.delete();
+
       return purchase;
-    } catch (error) {
-      console.error(error);
-      throw new HttpException('Purchase failed', HttpStatus.BAD_GATEWAY);
+    } catch (err: unknown) {
+      console.error('finalizePurchase error for', transactionId, err);
+
+      const msg = (err instanceof Error ? err.message : String(err)).slice(
+        0,
+        500,
+      );
+
+      await db.collection('transactions').doc(transactionId).update({
+        finalizeError: msg,
+        finalized: false,
+        finalizedAt: new Date(),
+      });
+      throw err;
     }
   }
 

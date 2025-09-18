@@ -1,8 +1,8 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
-  HttpCode,
   Param,
   Post,
   Query,
@@ -94,60 +94,31 @@ export class ProxyOrderController {
   }
 
   @Post('purchase')
-  @HttpCode(201)
-  @ApAuthGuard(UserRole.USER)
-  @ApiOperation({ summary: 'Purchase a proxy service' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        serviceId: { type: 'string' },
-        planId: { type: 'string' },
-        quantity: { type: 'number', example: 1 },
-        period: {
-          type: 'object',
-          properties: {
-            unit: { type: 'string', example: 'months' },
-            value: { type: 'number', example: 1 },
-          },
-        },
-        autoExtend: {
-          type: 'object',
-          properties: {
-            isEnabled: { type: 'boolean', example: true },
-            traffic: { type: 'number', example: 5 },
-          },
-        },
-        traffic: { type: 'number', example: 1 },
-        country: { type: 'string', example: 'US' },
-        ispId: { type: 'string', example: 'isp-1' },
-        couponCode: { type: 'string', example: 'DISCOUNT10' },
-      },
-      required: ['serviceId', 'planId'],
-    },
-  })
-  async purchaseProxy(
-    @Req() req: AuthenticatedRequest,
-    @Body('serviceId') serviceId: string,
-    @Body('planId') planId: string,
-    @Body()
-    options: {
-      quantity?: number;
-      period?: { unit: string; value: number };
-      autoExtend?: { isEnabled: boolean; traffic?: number };
-      traffic?: number;
-      country?: string;
-      ispId?: string;
-      couponCode?: string;
-    },
-  ): Promise<PurchaseOrderDto> {
-    const userId = req.user.uid;
-    return this.proxyOrderService.purchaseProxy(
-      userId,
-      serviceId,
-      planId,
-      options,
-    );
+  purchase(@Req() req: AuthenticatedRequest) {
+    const { transactionId, amount, serviceId, planId } = req.body as {
+      transactionId?: string;
+      amount?: number | string;
+      serviceId?: string;
+      planId?: string;
+    };
+
+    if (!serviceId || !planId) {
+      throw new BadRequestException('serviceId and planId are required');
+    }
+
+    const pricePaid = typeof amount === 'number' ? amount : Number(amount ?? 0);
+
+    const purchase: PurchaseOrderDto = {
+      userId: req.user.uid, // or from auth context
+      proxyServiceId: serviceId,
+      proxyPlanId: planId,
+      pricePaid, // map amount -> pricePaid
+      status: 'pending', // fill required fields
+      createdAt: new Date(),
+      details: { transactionId }, // whatever your DTO expects
+    };
+
+    return purchase;
   }
 
   @Get('my-purchases')
