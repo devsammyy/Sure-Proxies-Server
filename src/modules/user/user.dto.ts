@@ -17,6 +17,13 @@ export class CreateUserDTO {
   fullName: string;
 
   @ApiProperty({
+    example: '0810000000000',
+    description: 'Phone number of the user',
+  })
+  @IsNotEmpty()
+  phoneNumber: string;
+
+  @ApiProperty({
     example: 'StrongPass123',
     description: 'Password for the user account',
   })
@@ -32,6 +39,14 @@ export class UpdateUserDto {
   })
   @IsOptional()
   fullName?: string;
+
+  @ApiProperty({
+    example: '0810000000000',
+    description: 'Phone number of the user',
+    required: false,
+  })
+  @IsNotEmpty()
+  phoneNumber?: string;
 
   @ApiProperty({
     example: 'newpassword123',

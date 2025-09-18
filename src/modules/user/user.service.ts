@@ -1,12 +1,16 @@
 import { Injectable } from '@nestjs/common';
 import * as admin from 'firebase-admin';
 import { db, dbAuth } from 'src/main';
-import { UserModel, UserRole } from 'src/modules/user/user.model';
-import { CreateUserDTO, UpdateUserDto } from './user.dto';
+import { VirtualAccountResponse } from 'src/modules/account/virtual/account.model';
+import { PaymentpointService } from 'src/modules/paymentpoint/paymentpoint.service';
+import { UserDoc, UserRole } from 'src/modules/user/user.model';
+import { CreateUserDTO } from './user.dto';
 
 @Injectable()
 export class UserService {
-  public async create(model: CreateUserDTO): Promise<UserModel> {
+  constructor(private readonly paymentPointService: PaymentpointService) {}
+
+  public async create(model: CreateUserDTO): Promise<UserDoc> {
     try {
       const record = await dbAuth.createUser({
         displayName: model.fullName,
@@ -21,80 +25,75 @@ export class UserService {
         uid: record.uid,
         email: model.email,
         fullName: model.fullName,
+        phoneNumber: model.phoneNumber,
         createdAt: admin.firestore.Timestamp.now(),
         lastLogin: admin.firestore.Timestamp.now(),
         purchases: [],
         role: UserRole.USER,
-      });
+      } as UserDoc);
 
       const userDoc = await db.collection('users').doc(record.uid).get();
-      const data = userDoc.data() as
-        | {
-            uid: string;
-            email: string;
-            fullName: string;
-            createdAt: admin.firestore.Timestamp;
-            lastLogin: admin.firestore.Timestamp;
-            purchases: any[];
-            role: UserRole;
-          }
-        | undefined;
+      const data = userDoc.data() as UserDoc | undefined;
 
       if (!data) {
         throw new Error('User not found after creation');
       }
 
-      // Type assertion for lastLogin and createdAt
-      const createdAtTimestamp = data.createdAt;
-      const lastLoginTimestamp = data.lastLogin;
-
       return {
         uid: data.uid,
         email: data.email,
         fullName: data.fullName,
-        createdAt: createdAtTimestamp.toDate().getTime(), // 👈 timestamp number
-        lastLogin: lastLoginTimestamp.toDate().getTime(), // 👈 timestamp number
+        phoneNumber: data.phoneNumber,
+        createdAt: data.createdAt,
+        lastLogin: data.lastLogin,
         purchases: data.purchases,
         role: data.role,
-      } as UserModel;
+      };
     } catch (error: unknown) {
       console.error(error, 'Error creating user');
       throw error;
     }
   }
 
-  async saveUser(userId: string, userData: any): Promise<void> {
-    const userRef = db.collection('users').doc(userId);
-    await userRef.set(userData);
+  async saveUser(userId: string, userData: UserDoc): Promise<void> {
+    try {
+      const userRef = db.collection('users').doc(userId);
+      await userRef.set(userData).then(async () => {
+        await this.paymentPointService
+          .createVirtualAccount({
+            email: userData.email,
+            name: userData.fullName,
+            phoneNumber: userData.phoneNumber,
+          })
+          .then(async (virtual: VirtualAccountResponse) => {
+            const virtualAccountRef = db
+              .collection('virtual_accounts')
+              .doc(userId);
+            await virtualAccountRef.set(virtual);
+          });
+      });
+    } catch (error) {
+      console.error('Saving user in db', error);
+      throw new Error('Error saving user');
+    }
   }
-  public async findAll(): Promise<UserModel[]> {
+
+  public async findAll(): Promise<UserDoc[]> {
     const usersSnapshot = await db.collection('users').get();
 
     return usersSnapshot.docs.map((doc) => {
-      const data = doc.data() as
-        | {
-            uid: string;
-            email: string;
-            fullName: string;
-            createdAt: admin.firestore.Timestamp;
-            lastLogin: admin.firestore.Timestamp;
-            purchases: any[];
-            role: UserRole;
-          }
-        | undefined;
+      const data = doc.data() as UserDoc | undefined;
 
-      // Type assertion for lastLogin and createdAt
-      const createdAtTimestamp = data?.createdAt;
-      const lastLoginTimestamp = data?.lastLogin;
       return {
         uid: data?.uid,
         email: data?.email,
         fullName: data?.fullName,
-        createdAt: createdAtTimestamp?.toDate().getTime(), // 👈 timestamp number
-        lastLogin: lastLoginTimestamp?.toDate().getTime(), // 👈 timestamp number
-        purchases: data?.purchases || [],
-        role: data?.role,
-      } as UserModel;
+        phoneNumber: data?.phoneNumber,
+        createdAt: data?.createdAt,
+        lastLogin: data?.lastLogin,
+        purchases: (data?.purchases as unknown[]) ?? [],
+        role: data?.role ?? UserRole.USER,
+      } as UserDoc;
     });
   }
 
@@ -106,7 +105,7 @@ export class UserService {
     return { id: user.id, ...user.data() };
   }
 
-  async update(id: string, model: UpdateUserDto) {
+  async update(id: string, model: UserDoc) {
     const user = await this.findOne(id);
     const updatedUser = { ...user, ...model };
     await this.saveUser(id, updatedUser);
