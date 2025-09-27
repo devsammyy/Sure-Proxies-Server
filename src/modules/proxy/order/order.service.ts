@@ -71,9 +71,13 @@ export class ProxyOrderService {
     }
   }
 
-  /** Fetch all proxy services */
-  async getAvailableProxies(country: string = 'US'): Promise<ProxyOrderDto[]> {
+  async getAvailableProxies(country?: string): Promise<ProxyOrderDto[]> {
     try {
+      // If no country was provided, return empty array as requested
+      if (!country || country.trim() === '') {
+        return [];
+      }
+
       const response = await axios.get(this.apiBaseUrl);
       if (response.status !== 200) {
         throw new Error('Failed to fetch proxy services');
@@ -109,7 +113,7 @@ export class ProxyOrderService {
           } catch (err) {
             console.warn(
               `Could not fetch price for service ${service.id}, plan ${plan.id}`,
-              err.message,
+              (err as Error).message,
             );
             plan.basePrice = 0;
           }
