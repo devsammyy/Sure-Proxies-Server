@@ -26,7 +26,7 @@ export class CreateTransactionDto {
   amount: number;
 
   @ApiProperty({ description: 'Reference ID for external providers (if any)' })
-  reference?: string;
+  reference: string;
 }
 
 export class UpdateTransactionDto {

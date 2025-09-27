@@ -6,35 +6,7 @@ import { Transaction, TransactionHistory } from './transaction.model';
 @Injectable()
 export class TransactionsService {
   private collection = 'transactions';
-  private walletCollection = 'wallets';
   private historyCollection = 'transaction_histories';
-
-  // async create(
-  //   userId: string,
-  //   dto: CreateTransactionDto,
-  // ): Promise<Transaction> {
-  //   const id = db.collection(this.collection).doc().id;
-  //   const transaction: Transaction = {
-  //     id,
-  //     userId,
-  //     walletId: dto.walletId,
-  //     type: dto.type,
-  //     amount: dto.amount,
-  //     status: 'PENDING',
-  //     reference: dto.reference || '',
-  //     createdAt: new Date(),
-  //   };
-
-  //   await db.collection(this.collection).doc(id).set(transaction);
-
-  //   await this.createHistory(
-  //     transaction.id,
-  //     userId,
-  //     `Transaction created: ${dto.type} of amount ${dto.amount}`,
-  //   );
-
-  //   return transaction;
-  // }
 
   async create(
     userId: string,
@@ -44,11 +16,10 @@ export class TransactionsService {
     const transaction: Transaction = {
       id,
       userId,
-      // walletId: dto.walletId,
       type: dto.type,
       amount: dto.amount,
       status: 'PENDING',
-      reference: dto.reference || id,
+      reference: dto.reference,
       createdAt: new Date(),
     };
 

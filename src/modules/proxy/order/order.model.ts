@@ -1,5 +1,29 @@
-export interface PriceResponse {
-  appliedDiscounts: any[]; // You can replace 'any' with a more specific type if known
+// dtos/proxy.dto.ts
+export class ProxyOrderModel {
+  id: string;
+  label: string;
+  plans?: ProxyOrderPlanModel[];
+}
+
+export class ProxyOrderPlanModel {
+  id: string;
+  label: string;
+}
+
+export class PurchaseOrderModel {
+  id: string;
+  userId: string;
+  serviceId: string;
+
+  planId: string;
+  profitPrice: number;
+  status: 'pending' | 'active' | 'expired';
+  createdAt: Date;
+  details?: any;
+}
+
+export class PriceResponseModel {
+  appliedDiscounts: number[]; // You can replace 'any' with a more specific type if known
   finalPrice: number;
   priceNoDiscounts: number;
   discount: number;
@@ -14,28 +38,28 @@ export interface PriceResponse {
   currency: string;
 }
 
-export interface Isp {
+export class Isp {
   id: string;
   label: string;
 }
 
-export interface IspsByCountry {
+export class IspsByCountry {
   [countryCode: string]: Isp[];
 }
 
-export interface Periods {
+export class Periods {
   months: number[];
   days: number[];
 }
 
-export interface ServiceDetailsResponse {
+export class ServiceDetailsResponseModel {
   serviceId: string;
   countries: string[];
   isps: IspsByCountry;
   periods: Periods;
 }
 
-export interface PendingOptions {
+export class PendingOptions {
   quantity?: number;
   period?: { unit: 'months' | 'days' | 'years'; value: number };
   autoExtend?: { isEnabled: boolean };
@@ -45,7 +69,7 @@ export interface PendingOptions {
   couponCode?: string;
 }
 
-export interface PendingData {
+export class PendingDataModel {
   userId: string;
   serviceId: string;
   planId: string;
@@ -53,7 +77,14 @@ export interface PendingData {
   options: PendingOptions;
 }
 
-export interface TxDoc {
+export class ProxyOrderPurchaseModel {
+  id: string;
+  periodInMonths: number;
+  bandwidth: number;
+  totalPrice: number;
+}
+
+export class TxDoc {
   finalized?: boolean;
 }
 
@@ -61,4 +92,4 @@ export type FinalizeTxResult =
   | { status: 'no_pending' }
   | { status: 'no_tx' }
   | { status: 'already_finalized' }
-  | { status: 'ok'; pending: PendingData; txData: TxDoc };
+  | { status: 'ok'; pending: PurchaseOrderModel; txData: TxDoc };

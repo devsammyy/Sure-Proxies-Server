@@ -1,18 +1,11 @@
-import {
-  BadRequestException,
-  Body,
-  Controller,
-  Get,
-  Param,
-  Post,
-  Query,
-  Req,
-} from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { Request } from 'express';
 import { ApAuthGuard } from 'src/modules/auth/auth-guard.decorator';
 import { UserRole } from 'src/modules/user/user.model';
-import { ProxyOrderDto, PurchaseOrderDto } from './order.dto';
+
+import { PriceInputDto, PurchaseOrderInputDto } from './order.dto';
+import { ProxyOrderModel, PurchaseOrderModel } from './order.model';
 import { ProxyOrderService } from './order.service';
 
 interface AuthenticatedUser {
@@ -32,23 +25,29 @@ export class ProxyOrderController {
   constructor(private readonly proxyOrderService: ProxyOrderService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Get available proxy services with markup applied' })
+  @ApiOperation({
+    summary:
+      'Get a list of order services (emphasis on the services) available for purchase',
+  })
   @ApiResponse({
     status: 200,
-    description: 'List of available proxies',
-    type: [ProxyOrderService],
+    description:
+      'This endpoint is the entry point to the whole ordering process. It returns the list of orderable services, and optionally their plans when supported. The service and plan identifiers are required to be included within payloads of all the remaining endpoints: setup, price & execute.',
+    isArray: true,
+    type: [ProxyOrderModel],
   })
-  async getAvailableProxies(
-    @Query('country') country: string,
-  ): Promise<ProxyOrderDto[]> {
-    return this.proxyOrderService.getAvailableProxies(country || 'US');
+  async getAvailableProxies(): Promise<ProxyOrderModel[]> {
+    return this.proxyOrderService.getAvailableProxiesServices();
   }
 
   @Get(':serviceId/options')
-  @ApiOperation({ summary: 'Get options for a specific service/plan' })
+  @ApiOperation({
+    summary: 'Available options to the service',
+  })
   @ApiResponse({
     status: 200,
-    description: 'Available options for this service',
+    description:
+      "This allows you to fetch all the order properties available for the selected service. Some of the services might require a planId - refer to the plans available under the specific service in the /proxy_order endpoint. Each service might be described by different properties, so you shouldn't assume they all work the same way.",
   })
   async getServiceOptions(
     @Param('serviceId') serviceId: string,
@@ -58,67 +57,26 @@ export class ProxyOrderController {
   }
 
   @Post(':serviceId/price')
-  @ApiOperation({ summary: 'Get calculated price for a service/plan' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: {
-        planId: { type: 'string' },
-        country: { type: 'string' },
-        quantity: { type: 'number', example: 1 },
-        period: {
-          type: 'object',
-          properties: {
-            unit: { type: 'string', example: 'months' },
-            value: { type: 'number', example: 1 },
-          },
-        },
-      },
-      required: ['planId'],
-    },
+  @ApiOperation({
+    summary: 'Api to get price of a service',
+  })
+  @ApiResponse({
+    description:
+      'This endpoint allows to get a price for the selected configuration for a particular service. The response contains information about the total, subtotal, markups, discounts & unit prices.',
   })
   async getPrice(
     @Param('serviceId') serviceId: string,
-    @Body('planId') planId: string,
-    @Body('country') country: string,
-    @Body('quantity') quantity = 1,
-    @Body('period') period = { unit: 'months', value: 1 },
+    @Body('model') model: PriceInputDto,
   ) {
-    return this.proxyOrderService.getPrice(
-      serviceId,
-      planId,
-      country,
-      quantity,
-      period,
-    );
+    return this.proxyOrderService.getPrice(serviceId, model);
   }
 
   @Post('purchase')
-  purchase(@Req() req: AuthenticatedRequest) {
-    const { transactionId, amount, serviceId, planId } = req.body as {
-      transactionId?: string;
-      amount?: number | string;
-      serviceId?: string;
-      planId?: string;
-    };
-
-    if (!serviceId || !planId) {
-      throw new BadRequestException('serviceId and planId are required');
-    }
-
-    const pricePaid = typeof amount === 'number' ? amount : Number(amount ?? 0);
-
-    const purchase: PurchaseOrderDto = {
-      userId: req.user.uid, // or from auth context
-      proxyServiceId: serviceId,
-      proxyPlanId: planId,
-      pricePaid, // map amount -> pricePaid
-      status: 'pending', // fill required fields
-      createdAt: new Date(),
-      details: { transactionId }, // whatever your DTO expects
-    };
-
-    return purchase;
+  purchase(
+    @Param('serviceId') serviceId: string,
+    @Body('model') model: PurchaseOrderInputDto,
+  ) {
+    return this.proxyOrderService.purchaseProxy(serviceId, model);
   }
 
   @Get('my-purchases')
@@ -126,7 +84,7 @@ export class ProxyOrderController {
   @ApiOperation({ summary: 'Get all purchases of the logged-in user' })
   async getMyPurchases(
     @Req() req: AuthenticatedRequest,
-  ): Promise<PurchaseOrderDto[]> {
+  ): Promise<PurchaseOrderModel[]> {
     const userId = req.user.uid;
     return this.proxyOrderService.getUserPurchases(userId);
   }
@@ -135,7 +93,7 @@ export class ProxyOrderController {
 
   @Get('admin/all-purchases')
   @ApiOperation({ summary: 'Get all purchases (Admin only)' })
-  async getAllPurchases(): Promise<PurchaseOrderDto[]> {
+  async getAllPurchases(): Promise<PurchaseOrderModel[]> {
     return this.proxyOrderService.getAllPurchases();
   }
 
