@@ -60,18 +60,25 @@ export class ProxyOrderController {
   @ApiOperation({
     summary: 'Api to get price of a service',
   })
+  @ApiBody({
+    type: PriceInputDto,
+  })
   @ApiResponse({
     description:
       'This endpoint allows to get a price for the selected configuration for a particular service. The response contains information about the total, subtotal, markups, discounts & unit prices.',
   })
   async getPrice(
     @Param('serviceId') serviceId: string,
-    @Body('model') model: PriceInputDto,
+    @Body() model: PriceInputDto,
   ) {
     return this.proxyOrderService.getPrice(serviceId, model);
   }
 
   @Post('purchase')
+  @ApiBody({
+    description: 'Enter the options',
+    type: PurchaseOrderInputDto,
+  })
   purchase(
     @Param('serviceId') serviceId: string,
     @Body('model') model: PurchaseOrderInputDto,
