@@ -11,4 +11,12 @@ export class VirtualAccountService {
     const accountRef = db.collection('virtual_accounts').doc(userId);
     await accountRef.set(userData);
   }
+
+  async getVirtualAccountByUserId(
+    userId: string,
+  ): Promise<VirtualAccountResponse | null> {
+    const accountRef = db.collection('virtual_accounts').doc(userId);
+    const doc = await accountRef.get();
+    return doc.exists ? (doc.data() as VirtualAccountResponse) : null;
+  }
 }

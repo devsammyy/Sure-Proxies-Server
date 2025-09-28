@@ -11,12 +11,6 @@ export class Transaction {
   walletId?: string;
 
   @ApiProperty({
-    description: 'Receiver wallet (only used for transfers)',
-    required: false,
-  })
-  receiverWalletId?: string;
-
-  @ApiProperty({
     description: 'Type of transaction',
     enum: ['DEPOSIT', 'WITHDRAWAL', 'INVESTMENT', 'TRANSFER'],
   })

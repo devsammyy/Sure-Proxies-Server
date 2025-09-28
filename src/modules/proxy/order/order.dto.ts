@@ -1,23 +1,45 @@
-// dtos/proxy.dto.ts
-export interface ProxyOrderDto {
-  id: string;
-  name: string;
-  plans?: ProxyOrderPlanDto[];
-  basePrice: number;
+export class PriceInputDto {
+  planId: string;
+  quantity: number;
+  period: {
+    unit: 'months' | 'days' | 'years';
+    value: number;
+  };
 }
 
-export interface ProxyOrderPlanDto {
-  id: string;
-  name: string;
-  basePrice: number;
-}
-
-export interface PurchaseOrderDto {
+export class ProxyOrderPurchaseInputDto {
   userId: string;
-  proxyServiceId: string;
-  proxyPlanId: string;
-  pricePaid: number;
-  status: 'pending' | 'active' | 'expired';
-  createdAt: Date;
-  details?: any;
+  planId: string;
+  quantity: number;
+  country: string;
+  ispId: string;
+  period: {
+    unit: 'months' | 'days' | 'years';
+    value: number;
+  };
+  autoExtend: {
+    isEnabled: boolean;
+  };
+  traffic: number;
+}
+
+export class ProxyOrderPlanInputDto {
+  id: string;
+  label: string;
+}
+
+export class PurchaseOrderInputDto {
+  userId: string;
+  planId: string;
+  quantity: number;
+  country: string;
+  ispId: string;
+  period: {
+    unit: 'months' | 'days' | 'years';
+    value: number;
+  };
+  autoExtend: {
+    isEnabled: boolean;
+  };
+  traffic: number;
 }
