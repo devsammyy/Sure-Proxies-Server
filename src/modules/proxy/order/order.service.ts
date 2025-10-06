@@ -93,7 +93,7 @@ export class ProxyOrderService {
       const response = await axios.post<ServiceDetailsResponseModel>(
         `${this.apiBaseUrl}/${serviceId}`,
         {
-          planId,
+          planId: planId || null,
         },
       );
       return response.data;
@@ -109,20 +109,246 @@ export class ProxyOrderService {
   /** Get price from Proxy-Cheap API */
   async getPrice(serviceId: string, model?: PriceInputDto) {
     try {
+      // Build provider-specific payload
+      const payload: Record<string, unknown> = {};
+      const normalizedId = serviceId.toLowerCase();
+      // Heuristic classification: widen support without hardcoding every id
+      const requiresTraffic =
+        /rotating/.test(normalizedId) &&
+        (normalizedId.includes('mobile') ||
+          normalizedId.includes('residential'));
+      const requiresPackageCountry =
+        normalizedId.includes('datacenter') && normalizedId.includes('ipv6');
+      // Some services (e.g. static-mobile) require country but reject period
+      const requiresCountryNoPeriod =
+        (normalizedId.includes('static') ||
+          normalizedId.includes('dedicated')) &&
+        (normalizedId.includes('mobile') ||
+          normalizedId.includes('residential')) &&
+        !normalizedId.includes('rotating') &&
+        !normalizedId.includes('ipv6');
+      // Plan-only (override above logic): static-mobile & dedicated-mobile accept ONLY a planId (provider rejects country/period)
+      // Only dedicated-mobile is strictly plan-only; static-mobile allows optional country
+      const requiresPlanOnly = normalizedId === 'dedicated-mobile';
+
+      if (requiresPlanOnly) {
+        // Only planId required; if missing default to 'dedicated'
+        payload.planId = model?.planId || 'dedicated';
+      } else if (requiresTraffic) {
+        if (typeof model?.traffic !== 'number') {
+          throw new HttpException(
+            { message: 'traffic is required for rotating pricing' },
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+        payload.traffic = model.traffic;
+        // Explicitly strip any period just in case it was sent
+        if (payload.period) delete payload.period;
+        // NOTE: Provider returns period.NOT_ALLOWED for rotating/traffic-only services.
+        if (model?.country) payload.country = model.country; // some providers may accept country filter
+      } else if (requiresPackageCountry) {
+        if (!model?.packageId) {
+          throw new HttpException(
+            { message: 'packageId is required for static-datacenter-ipv6' },
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+        if (!model?.country) {
+          throw new HttpException(
+            { message: 'country is required for static-datacenter-ipv6' },
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+        payload.packageId = model.packageId;
+        payload.country = model.country;
+        if (model?.period) payload.period = model.period;
+      } else if (requiresCountryNoPeriod) {
+        // Country-only branch (no period). Explicitly strip any provided period.
+        if (payload.period) delete payload.period;
+        if (model?.period) delete (model as any).period; // defensive; should not mutate but safe clone scenario
+        // Static-mobile now only requires country when planId === 'dedicated'.
+        if (!requiresPlanOnly) {
+          if (
+            normalizedId.includes('static') &&
+            normalizedId.includes('mobile') &&
+            !normalizedId.includes('rotating')
+          ) {
+            if (model?.planId) payload.planId = model.planId;
+            if (model?.planId === 'dedicated') {
+              if (!model?.country) {
+                throw new HttpException(
+                  {
+                    message:
+                      'country is required for static-mobile dedicated plan',
+                  },
+                  HttpStatus.BAD_REQUEST,
+                );
+              }
+              payload.country = model.country;
+            } else if (model?.country) {
+              // If user supplies a country for other plans, pass it through (optional)
+              payload.country = model.country;
+            }
+            if (model?.quantity) payload.quantity = model.quantity;
+          } else {
+            // Other static/dedicated (non-rotating, non-ipv6) mobile/residential services still require country
+            if (!model?.country) {
+              throw new HttpException(
+                { message: 'country is required for this service' },
+                HttpStatus.BAD_REQUEST,
+              );
+            }
+            payload.country = model.country;
+            if (model?.planId) payload.planId = model.planId;
+            if (model?.quantity) payload.quantity = model.quantity;
+          }
+        }
+      } else {
+        // Generic pattern (legacy): planId, quantity, period
+        if (model?.planId) payload.planId = model.planId;
+        if (model?.quantity) payload.quantity = model.quantity;
+        if (model?.period) payload.period = model.period;
+        if (model?.country) payload.country = model.country;
+        if (model?.traffic) payload.traffic = model.traffic;
+        if (model?.packageId) payload.packageId = model.packageId;
+      }
+
+      // Debug logging (opt-in): set DEBUG_PROXY_ORDER=1 to enable
+      if (process.env.DEBUG_PROXY_ORDER === '1') {
+        try {
+          const branch = requiresTraffic
+            ? 'traffic-only'
+            : requiresPackageCountry
+              ? 'package+country'
+              : requiresCountryNoPeriod
+                ? 'country-no-period'
+                : 'generic';
+          const effectiveBranch = requiresPlanOnly ? 'plan-only' : branch;
+          console.log(
+            '[ProxyOrder:getPrice] building request',
+            JSON.stringify({ serviceId, branch: effectiveBranch, payload }),
+          );
+        } catch (e) {
+          console.warn('Debug logging failed', e);
+        }
+      }
+
+      // Additional safeguard for any rotating service that slipped classification
+      if (
+        !requiresTraffic &&
+        /rotating/.test(normalizedId) &&
+        typeof model?.traffic !== 'number'
+      ) {
+        throw new HttpException(
+          { message: 'traffic is required for rotating service' },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
+      // Sanitize payload: remove null/undefined
+      Object.keys(payload).forEach((k) => {
+        if (payload[k] == null) delete payload[k];
+      });
+
+      // Final defensive: remove period for any branch that should not send it
+      if (requiresTraffic || requiresCountryNoPeriod) {
+        if ('period' in payload) delete payload.period;
+      }
+      // If branch requires country and still missing, abort before provider call
+      if (
+        (requiresPackageCountry ||
+          (requiresCountryNoPeriod &&
+            !(
+              normalizedId.includes('static') &&
+              normalizedId.includes('mobile') &&
+              !normalizedId.includes('rotating') &&
+              model?.planId !== 'dedicated'
+            ))) &&
+        !payload.country
+      ) {
+        throw new HttpException(
+          { message: 'country missing before provider request' },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      if (requiresTraffic && typeof payload['traffic'] !== 'number') {
+        throw new HttpException(
+          { message: 'traffic missing before provider request' },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+
       const response = await axios.post<PriceResponseModel>(
         `${this.apiBaseUrl}/${serviceId}/price`,
-        {
-          planId: model?.planId,
-          quantity: model?.quantity,
-          period: {
-            ...model?.period,
-          },
-        },
+        payload,
       );
-      console.log(response?.data);
-      return response?.data; // contains finalPrice, unitPrice, etc.
-    } catch (error: any) {
-      console.error('Error fetching price:', error);
+      const base = response?.data;
+      // fetch markup config
+      const pricingConfig = await this.getPricingConfig();
+      const markupPercent =
+        pricingConfig?.perServiceMarkup?.[serviceId] ??
+        pricingConfig?.globalMarkup ??
+        0;
+      if (!markupPercent || markupPercent === 0) {
+        return {
+          ...base,
+          originalFinalPrice: base.finalPrice,
+          originalUnitPrice: base.unitPrice,
+          markupPercent: 0,
+          markupAmount: 0,
+        } as PriceResponseModel & Record<string, unknown>;
+      }
+
+      const multiplier = 1 + markupPercent / 100;
+      const newFinal = parseFloat((base.finalPrice * multiplier).toFixed(2));
+      const newUnit = parseFloat((base.unitPrice * multiplier).toFixed(4));
+      const markupAmount = parseFloat((newFinal - base.finalPrice).toFixed(2));
+
+      return {
+        ...base,
+        finalPrice: newFinal,
+        unitPrice: newUnit,
+        priceNoDiscounts: parseFloat(
+          (base.priceNoDiscounts * multiplier).toFixed(2),
+        ),
+        finalPriceInCurrency: newFinal,
+        subtotal: parseFloat((base.subtotal * multiplier).toFixed(2)),
+        originalFinalPrice: base.finalPrice,
+        originalUnitPrice: base.unitPrice,
+        markupPercent,
+        markupAmount,
+      } as PriceResponseModel & Record<string, unknown>;
+    } catch (error: unknown) {
+      if (axios.isAxiosError(error)) {
+        const status = error.response?.status;
+        const providerData = error.response?.data as unknown;
+        // Attempt to derive a concise provider-side message
+        let detail: string | undefined;
+        if (providerData && typeof providerData === 'object') {
+          const d: any = providerData;
+          detail =
+            d?.errors?.[0]?.message || d?.errors?.[0] || d?.message || d?.error;
+        }
+        console.error(
+          'Provider price API error:',
+          JSON.stringify(providerData),
+        );
+        // Additional payload context logged above on build; re-log minimal on failure if debug enabled
+        if (process.env.DEBUG_PROXY_ORDER === '1') {
+          console.error('[ProxyOrder:getPrice] failed for', serviceId);
+        }
+        throw new HttpException(
+          {
+            message: 'Failed to fetch price',
+            provider: detail || 'Unprocessable provider request',
+            statusCode: status || HttpStatus.BAD_GATEWAY,
+          },
+          status && status >= 400 && status < 600
+            ? status
+            : HttpStatus.BAD_GATEWAY,
+        );
+      }
+      console.error('Unknown error fetching price:', error);
       throw new HttpException('Failed to fetch price', HttpStatus.BAD_GATEWAY);
     }
   }
@@ -132,20 +358,17 @@ export class ProxyOrderService {
     model: ProxyOrderPurchaseInputDto,
   ): Promise<{ transactionId: string; amount: number }> {
     try {
-      const pricingConfig = await this.getPricingConfig();
-      const originalPrice = await this.getPrice(serviceId, {
+      // getPrice already includes markup in finalPrice
+      const priced = await this.getPrice(serviceId, {
         planId: model.planId,
         quantity: model.quantity,
-        period: {
-          ...model.period,
-        },
+        period: { ...model.period },
+        traffic: model.traffic,
+        packageId: (model as any).packageId,
+        country: model.country,
       });
-
-      const profitPrice = this.applyMarkup(
-        originalPrice?.finalPrice ?? originalPrice?.unitPrice ?? 0,
-        serviceId,
-        pricingConfig,
-      );
+      const profitPrice =
+        (priced as any)?.finalPrice ?? (priced as any)?.unitPrice ?? 0;
 
       const transaction: Transaction = await this.transactionsService.create(
         model.userId,
