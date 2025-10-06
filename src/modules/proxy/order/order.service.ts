@@ -119,21 +119,28 @@ export class ProxyOrderService {
           normalizedId.includes('residential'));
       const requiresPackageCountry =
         normalizedId.includes('datacenter') && normalizedId.includes('ipv6');
-      // Some services (e.g. static-mobile) require country but reject period
-      const requiresCountryNoPeriod =
+      // Country-required services (static/dedicated mobile/residential, non-rotating, non-ipv6) now support period
+      const countryRequiresPeriod =
         (normalizedId.includes('static') ||
           normalizedId.includes('dedicated')) &&
         (normalizedId.includes('mobile') ||
           normalizedId.includes('residential')) &&
         !normalizedId.includes('rotating') &&
         !normalizedId.includes('ipv6');
-      // Plan-only (override above logic): static-mobile & dedicated-mobile accept ONLY a planId (provider rejects country/period)
-      // Only dedicated-mobile is strictly plan-only; static-mobile allows optional country
-      const requiresPlanOnly = normalizedId === 'dedicated-mobile';
+      // Plan-only was previously applied to dedicated-mobile, but dedicated-mobile now REQUIRES country + planId (no period)
+      const requiresPlanOnly = false;
 
-      if (requiresPlanOnly) {
-        // Only planId required; if missing default to 'dedicated'
+      if (normalizedId === 'dedicated-mobile') {
+        if (!model?.country) {
+          throw new HttpException(
+            { message: 'country is required for dedicated-mobile' },
+            HttpStatus.BAD_REQUEST,
+          );
+        }
         payload.planId = model?.planId || 'dedicated';
+        payload.country = model.country;
+        if (model?.quantity) payload.quantity = model.quantity; // quantity now always expected by provider
+        if (model?.period) payload.period = model.period; // now permitted
       } else if (requiresTraffic) {
         if (typeof model?.traffic !== 'number') {
           throw new HttpException(
@@ -162,47 +169,17 @@ export class ProxyOrderService {
         payload.packageId = model.packageId;
         payload.country = model.country;
         if (model?.period) payload.period = model.period;
-      } else if (requiresCountryNoPeriod) {
-        // Country-only branch (no period). Explicitly strip any provided period.
-        if (payload.period) delete payload.period;
-        if (model?.period) delete (model as any).period; // defensive; should not mutate but safe clone scenario
-        // Static-mobile now only requires country when planId === 'dedicated'.
-        if (!requiresPlanOnly) {
-          if (
-            normalizedId.includes('static') &&
-            normalizedId.includes('mobile') &&
-            !normalizedId.includes('rotating')
-          ) {
-            if (model?.planId) payload.planId = model.planId;
-            if (model?.planId === 'dedicated') {
-              if (!model?.country) {
-                throw new HttpException(
-                  {
-                    message:
-                      'country is required for static-mobile dedicated plan',
-                  },
-                  HttpStatus.BAD_REQUEST,
-                );
-              }
-              payload.country = model.country;
-            } else if (model?.country) {
-              // If user supplies a country for other plans, pass it through (optional)
-              payload.country = model.country;
-            }
-            if (model?.quantity) payload.quantity = model.quantity;
-          } else {
-            // Other static/dedicated (non-rotating, non-ipv6) mobile/residential services still require country
-            if (!model?.country) {
-              throw new HttpException(
-                { message: 'country is required for this service' },
-                HttpStatus.BAD_REQUEST,
-              );
-            }
-            payload.country = model.country;
-            if (model?.planId) payload.planId = model.planId;
-            if (model?.quantity) payload.quantity = model.quantity;
-          }
+      } else if (countryRequiresPeriod) {
+        if (!model?.country) {
+          throw new HttpException(
+            { message: 'country is required for this service' },
+            HttpStatus.BAD_REQUEST,
+          );
         }
+        payload.country = model.country;
+        if (model?.planId) payload.planId = model.planId;
+        if (model?.quantity) payload.quantity = model.quantity; // ensure quantity present when provided
+        if (model?.period) payload.period = model.period;
       } else {
         // Generic pattern (legacy): planId, quantity, period
         if (model?.planId) payload.planId = model.planId;
@@ -220,8 +197,8 @@ export class ProxyOrderService {
             ? 'traffic-only'
             : requiresPackageCountry
               ? 'package+country'
-              : requiresCountryNoPeriod
-                ? 'country-no-period'
+              : countryRequiresPeriod
+                ? 'country+period'
                 : 'generic';
           const effectiveBranch = requiresPlanOnly ? 'plan-only' : branch;
           console.log(
@@ -251,19 +228,12 @@ export class ProxyOrderService {
       });
 
       // Final defensive: remove period for any branch that should not send it
-      if (requiresTraffic || requiresCountryNoPeriod) {
+      if (requiresTraffic) {
         if ('period' in payload) delete payload.period;
       }
       // If branch requires country and still missing, abort before provider call
       if (
-        (requiresPackageCountry ||
-          (requiresCountryNoPeriod &&
-            !(
-              normalizedId.includes('static') &&
-              normalizedId.includes('mobile') &&
-              !normalizedId.includes('rotating') &&
-              model?.planId !== 'dedicated'
-            ))) &&
+        (requiresPackageCountry || countryRequiresPeriod) &&
         !payload.country
       ) {
         throw new HttpException(
