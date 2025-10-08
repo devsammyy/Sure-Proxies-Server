@@ -117,9 +117,14 @@ export class ProxyOrderPurchaseInputDto {
   @IsString()
   userId: string;
 
-  @ApiProperty({ description: 'Plan id', example: 'premium' })
+  @ApiProperty({
+    description: 'Plan id (optional for traffic-only services)',
+    example: 'premium',
+    required: false,
+  })
+  @IsOptional()
   @IsString()
-  planId: string;
+  planId?: string;
 
   @ApiProperty({ description: 'Quantity', example: 1 })
   @IsInt()
