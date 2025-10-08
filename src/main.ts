@@ -44,7 +44,7 @@ async function bootstrap() {
 
   const allowList = [
     'http://localhost:3000',
-    'https://sure-proxies.vercel.app/login',
+    'https://sure-proxies.vercel.app',
     'http://127.0.0.1:3000',
     sanitize(process.env.FRONTEND_URL), // primary frontend
     ...extraOrigins,
