@@ -1,5 +1,11 @@
 import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
-import { ApiBody, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBody,
+  ApiOperation,
+  ApiParam,
+  ApiResponse,
+  ApiTags,
+} from '@nestjs/swagger';
 import { Request } from 'express';
 import { ApAuthGuard } from 'src/modules/auth/auth-guard.decorator';
 import { UserRole } from 'src/modules/user/user.model';
@@ -49,6 +55,10 @@ export class ProxyOrderController {
     description:
       "This allows you to fetch all the order properties available for the selected service. Some of the services might require a planId - refer to the plans available under the specific service in the /proxy_order endpoint. Each service might be described by different properties, so you shouldn't assume they all work the same way.",
   })
+  @ApiParam({
+    name: 'planId',
+    required: false,
+  })
   async getServiceOptions(
     @Param('serviceId') serviceId: string,
     @Query('planId') planId?: string,
@@ -74,7 +84,7 @@ export class ProxyOrderController {
     return this.proxyOrderService.getPrice(serviceId, model);
   }
 
-  @Post('purchase')
+  @Post(':serviceId/purchase')
   @ApiBody({
     description: 'Enter the options',
     type: PurchaseOrderInputDto,
@@ -84,6 +94,12 @@ export class ProxyOrderController {
     @Body('model') model: PurchaseOrderInputDto,
   ) {
     return this.proxyOrderService.purchaseProxy(serviceId, model);
+  }
+
+  @Post('finalize/:transactionId')
+  @ApiOperation({ summary: 'Finalize a pending purchase by transactionId' })
+  async finalizePurchase(@Param('transactionId') transactionId: string) {
+    return this.proxyOrderService.finalizePurchase(transactionId);
   }
 
   @Get('my-purchases')

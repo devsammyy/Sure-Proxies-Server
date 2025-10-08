@@ -74,6 +74,7 @@ export class PendingDataModel {
   serviceId: string;
   planId: string;
   pricePaid: number;
+  expectedPrice?: number; // Expected price in Naira for validation
   options: PendingOptions;
 }
 
@@ -92,4 +93,4 @@ export type FinalizeTxResult =
   | { status: 'no_pending' }
   | { status: 'no_tx' }
   | { status: 'already_finalized' }
-  | { status: 'ok'; pending: PurchaseOrderModel; txData: TxDoc };
+  | { status: 'ok'; pending: PendingDataModel; txData: TxDoc };

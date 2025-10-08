@@ -58,6 +58,17 @@ export class TransactionsService {
     return snapshot.docs.map((doc) => doc.data() as Transaction);
   }
 
+  async getTransactionById(transactionId: string): Promise<Transaction> {
+    const ref = db.collection(this.collection).doc(transactionId);
+    const doc = await ref.get();
+
+    if (!doc.exists) {
+      throw new BadRequestException('Transaction not found');
+    }
+
+    return doc.data() as Transaction;
+  }
+
   // async update(id: string, dto: UpdateTransactionDto): Promise<Transaction> {
   //   const ref = db.collection(this.collection).doc(id);
   //   const existing = await ref.get();

@@ -2,10 +2,12 @@ import {
   Body,
   Controller,
   Post,
+  Res,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { LoginDto } from 'src/modules/auth/auth.dto';
 import { AuthService } from 'src/modules/auth/auth.service';
 
@@ -22,7 +24,46 @@ export class AuthController {
   @UsePipes(new ValidationPipe({ transform: true }))
   @ApiResponse({ status: 200, description: 'User logged in successfully.' })
   @ApiResponse({ status: 401, description: 'Invalid credentials.' })
-  login(@Body() loginDto: LoginDto) {
-    return this.authSvc.login(loginDto);
+  async login(
+    @Body() loginDto: LoginDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.authSvc.login(loginDto);
+    // Create session cookie (token + role) for middleware; HttpOnly for security
+    try {
+      const payload = Buffer.from(
+        JSON.stringify({ t: result.idToken, r: result.user.role }),
+        'utf8',
+      ).toString('base64');
+      const twelveHoursMs = 12 * 60 * 60 * 1000;
+      res.cookie('sp_auth', payload, {
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: twelveHoursMs,
+        secure: process.env.NODE_ENV === 'production',
+        path: '/',
+      });
+    } catch {
+      // fail silently, login still succeeds
+    }
+    return result;
+  }
+
+  @Post('logout')
+  @ApiOperation({ summary: 'Logout user (clear auth cookie)' })
+  @ApiResponse({ status: 200, description: 'User logged out.' })
+  logout(@Res({ passthrough: true }) res: Response) {
+    try {
+      res.cookie('sp_auth', '', {
+        httpOnly: true,
+        sameSite: 'lax',
+        maxAge: 0,
+        secure: process.env.NODE_ENV === 'production',
+        path: '/',
+      });
+    } catch {
+      // ignore
+    }
+    return { success: true };
   }
 }

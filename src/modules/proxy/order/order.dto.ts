@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Min,
@@ -77,6 +78,35 @@ export class PriceInputDto {
   @ValidateNested()
   @Type(() => PeriodDto)
   period?: PeriodDto;
+
+  @ApiProperty({
+    description: 'Traffic amount (GB) for mobile/rotating services',
+    required: false,
+    example: 3,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  traffic?: number;
+
+  @ApiProperty({
+    description:
+      'Package / bundle identifier (for static datacenter ipv6 etc.)',
+    required: false,
+    example: '50',
+  })
+  @IsOptional()
+  @IsString()
+  packageId?: string;
+
+  @ApiProperty({
+    description: 'Country code (ISO2) where required by the service',
+    required: false,
+    example: 'US',
+  })
+  @IsOptional()
+  @IsString()
+  country?: string;
 }
 
 export class ProxyOrderPurchaseInputDto {
@@ -137,6 +167,26 @@ export class ProxyOrderPurchaseInputDto {
   @IsInt()
   @Min(0)
   traffic?: number;
+
+  @ApiProperty({
+    description: 'Package / bundle identifier (optional for certain services)',
+    required: false,
+    example: '50',
+  })
+  @IsOptional()
+  @IsString()
+  packageId?: string;
+
+  @ApiProperty({
+    description:
+      'Expected price that was displayed to the user (for validation)',
+    required: false,
+    example: 49.99,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  expectedPrice?: number;
 }
 
 export class ProxyOrderPlanInputDto {
@@ -201,4 +251,15 @@ export class PurchaseOrderInputDto {
   @IsInt()
   @Min(0)
   traffic?: number;
+
+  @ApiProperty({
+    description:
+      'Expected price that was displayed to the user (for validation)',
+    required: false,
+    example: 49.99,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  expectedPrice?: number;
 }
