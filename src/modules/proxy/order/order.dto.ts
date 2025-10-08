@@ -4,6 +4,7 @@ import {
   IsBoolean,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Min,
@@ -175,6 +176,17 @@ export class ProxyOrderPurchaseInputDto {
   @IsOptional()
   @IsString()
   packageId?: string;
+
+  @ApiProperty({
+    description:
+      'Expected price that was displayed to the user (for validation)',
+    required: false,
+    example: 49.99,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  expectedPrice?: number;
 }
 
 export class ProxyOrderPlanInputDto {
@@ -239,4 +251,15 @@ export class PurchaseOrderInputDto {
   @IsInt()
   @Min(0)
   traffic?: number;
+
+  @ApiProperty({
+    description:
+      'Expected price that was displayed to the user (for validation)',
+    required: false,
+    example: 49.99,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  expectedPrice?: number;
 }

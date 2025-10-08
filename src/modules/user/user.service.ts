@@ -1,15 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import * as admin from 'firebase-admin';
 import { db, dbAuth } from 'src/main';
-import { VirtualAccountResponse } from 'src/modules/account/virtual/account.model';
-import { PaymentpointService } from 'src/modules/paymentpoint/paymentpoint.service';
 import { UserDoc, UserRole } from 'src/modules/user/user.model';
 import { CreateUserDTO } from './user.dto';
 
 @Injectable()
 export class UserService {
-  constructor(private readonly paymentPointService: PaymentpointService) {}
-
   public async create(model: CreateUserDTO): Promise<UserDoc> {
     try {
       const record = await dbAuth.createUser({
@@ -58,22 +54,11 @@ export class UserService {
   async saveUser(userId: string, userData: UserDoc): Promise<void> {
     try {
       const userRef = db.collection('users').doc(userId);
-      await userRef.set(userData).then(async () => {
-        await this.paymentPointService
-          .createVirtualAccount({
-            email: userData.email,
-            name: userData.fullName,
-            phoneNumber: userData.phoneNumber,
-          })
-          .then(async (virtual: VirtualAccountResponse) => {
-            const virtualAccountRef = db
-              .collection('virtual_accounts')
-              .doc(userId);
-            await virtualAccountRef.set(virtual);
-          });
-      });
+      // ✅ Just save the user - virtual accounts created on first purchase
+      await userRef.set(userData);
+      console.log('✅ [USER] User saved successfully:', userId);
     } catch (error) {
-      console.error('Saving user in db', error);
+      console.error('❌ [USER] Error saving user in db:', error);
       throw new Error('Error saving user');
     }
   }

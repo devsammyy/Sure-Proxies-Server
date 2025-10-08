@@ -2,9 +2,12 @@
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import axios from 'axios';
+import { FieldValue } from 'firebase-admin/firestore';
 import { db } from 'src/main';
+import { PaymentpointService } from 'src/modules/paymentpoint/paymentpoint.service';
 import {
   FinalizeTxResult,
+  PendingDataModel,
   PriceResponseModel,
   PurchaseOrderModel,
   ServiceDetailsResponseModel,
@@ -19,7 +22,10 @@ import { ProxyOrderModel } from './order.model';
 export class ProxyOrderService {
   private readonly apiBaseUrl = 'https://api.proxy-cheap.com/v2/order';
 
-  constructor(private readonly transactionsService: TransactionsService) {}
+  constructor(
+    private readonly transactionsService: TransactionsService,
+    private readonly paymentPointService: PaymentpointService,
+  ) {}
 
   /** Fetch pricing config from Firestore */
   private async getPricingConfig() {
@@ -38,6 +44,56 @@ export class ProxyOrderService {
     }
   }
 
+  /** Fetch current USD to NGN exchange rate from Firestore or external API */
+  private async getExchangeRate(): Promise<number> {
+    try {
+      // Try to get from Firestore cache first
+      const rateDoc = await db.collection('config').doc('exchange_rate').get();
+
+      if (rateDoc.exists) {
+        const data = rateDoc.data();
+        const cachedRate = data?.rate;
+        const lastUpdated = data?.lastUpdated?.toDate();
+
+        // Use cached rate if less than 1 hour old
+        if (cachedRate && lastUpdated) {
+          const hoursSinceUpdate =
+            (Date.now() - lastUpdated.getTime()) / (1000 * 60 * 60);
+          if (hoursSinceUpdate < 1) {
+            console.log('💱 [EXCHANGE RATE] Using cached rate:', cachedRate);
+            return cachedRate;
+          }
+        }
+      }
+
+      // Fetch fresh rate from external API
+      console.log('💱 [EXCHANGE RATE] Fetching fresh rate from API...');
+      const response = await axios.get(
+        'https://api.exchangerate-api.com/v4/latest/USD',
+      );
+      const rate = response.data?.rates?.NGN;
+
+      if (!rate || typeof rate !== 'number') {
+        console.warn(
+          '⚠️  [EXCHANGE RATE] Invalid rate from API, using fallback',
+        );
+        return 1500; // Fallback rate
+      }
+
+      // Cache the rate
+      await db.collection('config').doc('exchange_rate').set({
+        rate,
+        lastUpdated: new Date(),
+      });
+
+      console.log('✅ [EXCHANGE RATE] Fresh rate fetched and cached:', rate);
+      return rate;
+    } catch (error) {
+      console.error('❌ [EXCHANGE RATE] Error fetching rate:', error);
+      return 1500; // Fallback rate
+    }
+  }
+
   /** Apply markup to original price */
   private applyMarkup(
     originalPrice: number,
@@ -47,6 +103,63 @@ export class ProxyOrderService {
     const markup =
       config?.perServiceMarkup?.[serviceId] ?? config?.globalMarkup ?? 0;
     return Math.round(originalPrice * (1 + markup / 100));
+  }
+
+  /**
+   * Ensure user has virtual account (create if not exists)
+   * This implements lazy creation - only creates on first purchase
+   */
+  private async ensureVirtualAccount(userId: string): Promise<void> {
+    try {
+      console.log(
+        '🏦 [VIRTUAL ACCOUNT] Checking if user has virtual account...',
+      );
+
+      const virtualAccountRef = db.collection('virtual_accounts').doc(userId);
+      const virtualAccountSnap = await virtualAccountRef.get();
+
+      if (virtualAccountSnap.exists) {
+        console.log('✅ [VIRTUAL ACCOUNT] User already has virtual account');
+        return;
+      }
+
+      console.log(
+        '📝 [VIRTUAL ACCOUNT] No virtual account found, creating one...',
+      );
+
+      // Get user details
+      const userSnap = await db.collection('users').doc(userId).get();
+      const userData = userSnap.data();
+
+      if (!userData) {
+        throw new HttpException('User not found', HttpStatus.NOT_FOUND);
+      }
+
+      // Create virtual account via PaymentPoint API
+      const virtualAccount =
+        await this.paymentPointService.createVirtualAccount({
+          email: userData.email,
+          name: userData.fullName,
+          phoneNumber: userData.phoneNumber,
+        });
+
+      // Save to database
+      await virtualAccountRef.set(virtualAccount as any);
+
+      console.log(
+        '✅ [VIRTUAL ACCOUNT] Virtual account created successfully for user:',
+        userId,
+      );
+    } catch (error) {
+      console.error(
+        '❌ [VIRTUAL ACCOUNT] Error ensuring virtual account:',
+        error,
+      );
+      throw new HttpException(
+        'Failed to create virtual account',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   /** Create default pricing config */
@@ -330,6 +443,16 @@ export class ProxyOrderService {
     model: ProxyOrderPurchaseInputDto,
   ): Promise<{ transactionId: string; amount: number }> {
     try {
+      console.log('💰 [PURCHASE] Starting purchase for service:', serviceId);
+      console.log('📋 [PURCHASE] User ID:', model.userId);
+      console.log(
+        '🎯 [PURCHASE] Expected price from frontend:',
+        model.expectedPrice,
+      );
+
+      // ✅ Ensure user has virtual account (lazy creation on first purchase)
+      await this.ensureVirtualAccount(model.userId);
+
       // getPrice already includes markup in finalPrice
       const priced = await this.getPrice(serviceId, {
         planId: model.planId,
@@ -342,6 +465,19 @@ export class ProxyOrderService {
       const profitPrice =
         (priced as any)?.finalPrice ?? (priced as any)?.unitPrice ?? 0;
 
+      console.log('💵 [PURCHASE] Backend calculated price (USD):', profitPrice);
+
+      // Store expectedPrice for validation AFTER webhook confirms payment
+      if (model.expectedPrice !== undefined && model.expectedPrice !== null) {
+        console.log(
+          '� [PURCHASE] Expected price from frontend (NGN):',
+          model.expectedPrice,
+        );
+        console.log(
+          '⏳ [PURCHASE] Price validation will occur after payment confirmation in webhook',
+        );
+      }
+
       const transaction: Transaction = await this.transactionsService.create(
         model.userId,
         {
@@ -351,9 +487,39 @@ export class ProxyOrderService {
         },
       );
 
+      console.log('📝 [PURCHASE] Transaction created:', transaction.id);
+
+      // Save pending purchase with all order details
+      const pendingData: PendingDataModel = {
+        userId: model.userId,
+        serviceId,
+        planId: model.planId,
+        pricePaid: profitPrice,
+        expectedPrice: model.expectedPrice, // Store for validation in webhook
+        options: {
+          quantity: model.quantity,
+          period: model.period,
+          autoExtend: model.autoExtend,
+          traffic: model.traffic,
+          country: model.country,
+          ispId: model.ispId,
+        },
+      };
+
+      await db
+        .collection('pending_purchases')
+        .doc(transaction.id)
+        .set(pendingData);
+
+      console.log(
+        '💾 [PURCHASE] Pending purchase saved for transaction:',
+        transaction.id,
+      );
+      console.log('✨ [PURCHASE] Purchase initialization complete');
+
       return { transactionId: transaction.id, amount: profitPrice };
     } catch (error) {
-      console.error('purchaseProxy error:', error);
+      console.error('❌ [PURCHASE] Purchase error:', error);
       throw new HttpException(
         'Purchase initialization failed',
         HttpStatus.BAD_GATEWAY,
@@ -371,7 +537,7 @@ export class ProxyOrderService {
         if (!pendingSnap.exists) {
           return { status: 'no_pending' };
         }
-        const pending = pendingSnap.data() as PurchaseOrderModel;
+        const pending = pendingSnap.data() as PendingDataModel;
 
         // fetch transaction doc
         const txSnap = await t.get(txRef);
@@ -406,52 +572,122 @@ export class ProxyOrderService {
         return null;
       }
 
-      // const { pending } = result;
+      const { pending } = result;
 
-      // // Execute the external proxy API (outside transaction)
-      // const executeResponse = await axios.post<Record<string, unknown>>(
-      //   `${this.apiBaseUrl}/${pending.serviceId}/execute`,
-      //   {
-      //     planId: pending.planId,
-      //     quantity: pending.options.quantity ?? 0,
-      //     period: pending.options.period ?? {},
-      //     autoExtend: pending.options.autoExtend ?? {},
-      //     traffic: pending.options.traffic ?? 0,
-      //     country: pending.options.country,
-      //     ispId: pending.options.ispId,
-      //     couponCode: pending.options.couponCode,
-      //   },
-      //   {
-      //     headers: {
-      //       'X-Api-Key': process.env.PROXY_API_KEY as string,
-      //       'X-Api-Secret': process.env.PROXY_API_SECRET as string,
-      //     },
-      //   },
-      // );
+      // ✅ Validate price if expectedPrice was provided (after payment confirmation)
+      if (
+        pending.expectedPrice !== undefined &&
+        pending.expectedPrice !== null
+      ) {
+        console.log('🔍 [FINALIZE] Starting price validation after payment...');
+
+        // Get exchange rate to convert USD to Naira
+        const exchangeRate = await this.getExchangeRate();
+
+        // Convert USD price to Naira
+        const priceInNaira = Math.round(pending.pricePaid * exchangeRate);
+
+        const priceDiff = Math.abs(priceInNaira - pending.expectedPrice);
+        const tolerance = Math.max(priceInNaira * 0.01, 100); // 1% or 100 NGN
+
+        console.log('💱 [FINALIZE] Exchange rate (USD to NGN):', exchangeRate);
+        console.log('💵 [FINALIZE] Price paid (USD):', pending.pricePaid);
+        console.log('💵 [FINALIZE] Price paid (NGN):', priceInNaira);
+        console.log(
+          '📌 [FINALIZE] Expected price (NGN):',
+          pending.expectedPrice,
+        );
+        console.log('📊 [FINALIZE] Difference (NGN):', priceDiff);
+        console.log('📏 [FINALIZE] Tolerance (NGN):', tolerance);
+
+        if (priceDiff > tolerance) {
+          console.error('❌ [FINALIZE] Price mismatch detected after payment!');
+          console.error(
+            '⚠️  [FINALIZE] This indicates a serious issue - payment already made',
+          );
+
+          // Log to transaction for investigation
+          await db
+            .collection('transactions')
+            .doc(transactionId)
+            .update({
+              priceValidationFailed: true,
+              priceValidationDetails: {
+                pricePaidUSD: pending.pricePaid,
+                pricePaidNGN: priceInNaira,
+                expectedNGN: pending.expectedPrice,
+                difference: priceDiff,
+                tolerance,
+                exchangeRate,
+              },
+            });
+
+          throw new HttpException(
+            {
+              message:
+                'Price validation failed after payment - contact support',
+              currentPrice: priceInNaira,
+              expectedPrice: pending.expectedPrice,
+              code: 'PRICE_VALIDATION_FAILED_AFTER_PAYMENT',
+            },
+            HttpStatus.CONFLICT,
+          );
+        }
+
+        console.log('✅ [FINALIZE] Price validation passed');
+      }
+
+      // Execute the external proxy API (outside transaction)
+      const executeResponse = await axios.post<Record<string, unknown>>(
+        `${this.apiBaseUrl}/${pending.serviceId}/execute`,
+        {
+          planId: pending.planId,
+          quantity: pending.options.quantity ?? 0,
+          period: pending.options.period ?? {},
+          autoExtend: pending.options.autoExtend ?? {},
+          traffic: pending.options.traffic ?? 0,
+          country: pending.options.country,
+          ispId: pending.options.ispId,
+        },
+        {
+          headers: {
+            'X-Api-Key': process.env.PROXY_API_KEY as string,
+            'X-Api-Secret': process.env.PROXY_API_SECRET as string,
+          },
+        },
+      );
 
       // construct and save purchase
-      // const purchase: PurchaseOrderModel = {
-      //   userId: pending.userId,
-      //   serviceId: pending.serviceId,
-      //   planId: pending.planId,
-      //   profitPrice: pending.profitPrice,
-      //   status: 'active',
-      //   createdAt: new Date(),
-      // };
+      const purchase: PurchaseOrderModel = {
+        id: '',
+        userId: pending.userId,
+        serviceId: pending.serviceId,
+        planId: pending.planId,
+        profitPrice: pending.pricePaid,
+        status: 'active',
+        createdAt: new Date(),
+        details: executeResponse.data,
+      };
 
-      // const purchaseRef = await db.collection('purchases').add(purchase);
+      const purchaseRef = await db.collection('purchases').add(purchase);
+      purchase.id = purchaseRef.id;
 
-      // // attach purchase id to user document
-      // await db
-      //   .collection('users')
-      //   .doc(pending.userId) // now typed as string
-      //   .update({
-      //     purchases: dbFireStore.FieldValue.arrayUnion(purchaseRef.id),
-      //   });
+      // Update purchase document with its own ID
+      await purchaseRef.update({ id: purchaseRef.id });
 
-      // await pendingRef.delete();
+      // attach purchase id to user document using FieldValue
+      await db
+        .collection('users')
+        .doc(pending.userId)
+        .update({
+          purchases: FieldValue.arrayUnion(purchaseRef.id) as any,
+        });
 
-      // return purchase;
+      // Delete pending purchase
+      await pendingRef.delete();
+
+      console.log('Purchase finalized successfully:', purchaseRef.id);
+      return purchase;
     } catch (err: unknown) {
       console.error('finalizePurchase error for', transactionId, err);
 

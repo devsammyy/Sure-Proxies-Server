@@ -1,54 +1,20 @@
 // src/webhook/webhook.controller.ts
 import {
+  BadRequestException,
   Controller,
   Headers,
   HttpStatus,
   Post,
   Req,
   Res,
+  UnauthorizedException,
 } from '@nestjs/common';
-import * as crypto from 'crypto';
 import type { Request, Response } from 'express';
-import { db } from 'src/main';
-import { ProxyOrderService } from 'src/modules/proxy/order/order.service';
-import { TransactionsService } from 'src/modules/transaction/transaction.service';
-
-type WebhookPayload = {
-  transaction_id?: string;
-  amount_paid?: number;
-  transaction_status?: string;
-  settlement_amount?: number;
-  settlement_fee?: number;
-  sender?: any;
-  receiver?: any;
-  customer?: {
-    customer_id?: string;
-    name?: string;
-    email?: string;
-    phone?: string;
-  };
-  description?: string;
-  timestamp?: string;
-  [key: string]: unknown;
-};
-
-// Narrow the Firestore transaction shape you actually use here
-interface TransactionDoc {
-  status: 'PENDING' | 'SUCCESS' | 'FAILED';
-  userId: string;
-  reference?: string;
-  amount?: number;
-  createdAt?: FirebaseFirestore.Timestamp | Date;
-}
+import { WebhookPayload, WebhookService } from './webhook.service';
 
 @Controller('webhook')
 export class WebhookController {
-  private securityKey = process.env.PAYMENTPOINT_SECRET!;
-
-  constructor(
-    private readonly transactionsService: TransactionsService,
-    private readonly proxyOrderService: ProxyOrderService,
-  ) {}
+  constructor(private readonly webhookService: WebhookService) {}
 
   @Post()
   async handleWebhook(
@@ -56,172 +22,95 @@ export class WebhookController {
     @Res() res: Response,
     @Headers('paymentpoint-signature') signature: string,
   ) {
+    console.log('\n' + '='.repeat(80));
+    console.log('🎯 [WEBHOOK CONTROLLER] Incoming webhook request');
+    console.log('⏰ [WEBHOOK CONTROLLER] Timestamp:', new Date().toISOString());
+    console.log('🔗 [WEBHOOK CONTROLLER] URL:', req.url);
+    console.log('📨 [WEBHOOK CONTROLLER] Method:', req.method);
+    console.log('🌐 [WEBHOOK CONTROLLER] IP:', req.ip);
+    console.log(
+      '📋 [WEBHOOK CONTROLLER] Headers:',
+      JSON.stringify(req.headers, null, 2),
+    );
+    console.log('='.repeat(80) + '\n');
+
     try {
+      // Validate raw body exists
       if (!req.rawBody) {
-        console.error('❌ rawBody is missing');
-        return res
-          .status(HttpStatus.BAD_REQUEST)
-          .json({ error: 'Missing raw body' });
+        console.error(
+          '❌ [WEBHOOK CONTROLLER] rawBody is missing from request',
+        );
+        throw new BadRequestException('Missing raw body');
       }
 
+      console.log(
+        '✅ [WEBHOOK CONTROLLER] Raw body present, length:',
+        req.rawBody.length,
+      );
+
+      // Validate signature header exists
       if (!signature) {
-        return res
-          .status(HttpStatus.BAD_REQUEST)
-          .json({ error: 'Missing signature header' });
+        console.error('❌ [WEBHOOK CONTROLLER] signature header is missing');
+        throw new BadRequestException('Missing signature header');
       }
 
-      // verify signature
-      const calculatedSignature = crypto
-        .createHmac('sha256', this.securityKey)
-        .update(req.rawBody)
-        .digest('hex');
+      console.log(
+        '🔑 [WEBHOOK CONTROLLER] Signature header present:',
+        signature,
+      );
 
-      if (calculatedSignature !== signature) {
-        console.warn('❌ Invalid signature', {
-          calculated: calculatedSignature,
-          received: signature,
-        });
-        return res
-          .status(HttpStatus.UNAUTHORIZED)
-          .json({ error: 'Invalid signature' });
+      // Verify webhook signature
+      console.log('🔐 [WEBHOOK CONTROLLER] Verifying signature...');
+      const isValidSignature = this.webhookService.verifySignature(
+        req.rawBody,
+        signature,
+      );
+
+      if (!isValidSignature) {
+        console.error('❌ [WEBHOOK CONTROLLER] Invalid signature!');
+        throw new UnauthorizedException('Invalid signature');
       }
 
+      console.log('✅ [WEBHOOK CONTROLLER] Signature verified successfully');
+
+      // Parse payload
       const payload = req.body as WebhookPayload;
+      console.log(
+        '📦 [WEBHOOK CONTROLLER] Parsed payload:',
+        JSON.stringify(payload, null, 2),
+      );
 
-      const {
-        transaction_id,
-        amount_paid,
-        transaction_status,
-        settlement_amount,
-        settlement_fee,
-        customer,
-      } = payload;
+      // Process transaction through service
+      console.log('⚙️  [WEBHOOK CONTROLLER] Processing transaction...');
+      const result = await this.webhookService.processTransaction(payload);
 
-      console.log('✅ Webhook payload:', {
-        transaction_id,
-        transaction_status,
-        amount_paid,
-      });
+      console.log('✨ [WEBHOOK CONTROLLER] Transaction processed successfully');
+      console.log(
+        '📤 [WEBHOOK CONTROLLER] Result:',
+        JSON.stringify(result, null, 2),
+      );
 
-      // Try to find matching transaction by reference or doc id
-      let txDoc: FirebaseFirestore.DocumentSnapshot | null = null;
-
-      if (transaction_id) {
-        const byRefSnap = await db
-          .collection('transactions')
-          .where('reference', '==', transaction_id)
-          .limit(1)
-          .get();
-        if (!byRefSnap.empty) txDoc = byRefSnap.docs[0];
-        else {
-          const byIdSnap = await db
-            .collection('transactions')
-            .doc(transaction_id)
-            .get();
-          if (byIdSnap.exists) txDoc = byIdSnap;
-        }
-      }
-
-      // try using customer.customer_id if provided
-      if (!txDoc && customer?.customer_id) {
-        const byCustSnap = await db
-          .collection('transactions')
-          .where('reference', '==', customer.customer_id)
-          .limit(1)
-          .get();
-        if (!byCustSnap.empty) txDoc = byCustSnap.docs[0];
-      }
-
-      // fallback by amount + PENDING status
-      if (!txDoc && typeof amount_paid === 'number') {
-        const fallbackSnap = await db
-          .collection('transactions')
-          .where('amount', '==', amount_paid)
-          .where('status', '==', 'PENDING')
-          .orderBy('createdAt', 'desc')
-          .limit(1)
-          .get();
-        if (!fallbackSnap.empty) txDoc = fallbackSnap.docs[0];
-      }
-
-      if (!txDoc) {
-        console.warn('No matching transaction found for webhook', {
-          transaction_id,
-          customer,
-        });
-        return res.status(HttpStatus.OK).json({ status: 'unmatched' });
-      }
-
-      // Do NOT use `as any`
-      const txData = txDoc.data() as TransactionDoc | undefined;
-      const txId = txDoc.id;
-
-      if (!txData) {
-        console.warn('Transaction snapshot has no data', { txId });
-        return res.status(HttpStatus.OK).json({ status: 'no_data' });
-      }
-
-      // If already SUCCESS, respond early
-      if (txData.status === 'SUCCESS') {
-        console.log('Transaction already SUCCESS, ignoring webhook', txId);
-        return res.status(HttpStatus.OK).json({ status: 'already_processed' });
-      }
-
-      // Update transaction status based on webhook
-      if (
-        transaction_status === 'success' ||
-        transaction_status === 'completed'
-      ) {
-        await this.transactionsService.update(txId, { status: 'SUCCESS' });
-
-        // write history entry
-        await db.collection('transaction_histories').add({
-          transactionId: txId,
-          userId: txData.userId,
-          description: `Payment confirmed by PaymentPoint: ${transaction_id ?? 'n/a'}`,
-          meta: {
-            transaction_id,
-            amount_paid,
-            settlement_amount,
-            settlement_fee,
-          },
-          createdAt: new Date(),
-        });
-
-        // finalize purchase (idempotent)
-        try {
-          const purchase = await this.proxyOrderService.finalizePurchase(txId);
-          if (purchase) {
-            console.log('Purchase finalized and saved for transaction', txId);
-          } else {
-            console.log(
-              'No pending purchase to finalize for transaction',
-              txId,
-            );
-          }
-        } catch (err) {
-          console.error('Error finalizing purchase for transaction', txId, err);
-          // do not change transaction status here; you can retry finalize later
-        }
-      } else {
-        // mark failed
-        await this.transactionsService.update(txId, { status: 'FAILED' });
-
-        await db.collection('transaction_histories').add({
-          transactionId: txId,
-          userId: txData.userId,
-          description: `Payment failed or not successful: ${transaction_status}`,
-          meta: { transaction_id, amount_paid },
-          createdAt: new Date(),
-        });
-      }
-
-      return res.status(HttpStatus.OK).json({ status: 'processed' });
+      // Return appropriate response based on result
+      return res.status(HttpStatus.OK).json(result);
     } catch (err) {
-      console.error('Webhook error:', err);
+      console.error('❌ [WEBHOOK CONTROLLER] Error:', err);
+
+      // Handle known exceptions
+      if (err instanceof BadRequestException) {
+        console.error('🚫 [WEBHOOK CONTROLLER] Bad request:', err.message);
+        return res.status(HttpStatus.BAD_REQUEST).json({ error: err.message });
+      }
+
+      if (err instanceof UnauthorizedException) {
+        console.error('🔒 [WEBHOOK CONTROLLER] Unauthorized:', err.message);
+        return res.status(HttpStatus.UNAUTHORIZED).json({ error: err.message });
+      }
+
+      // Handle unknown errors
+      console.error('💥 [WEBHOOK CONTROLLER] Internal error:', err);
       return res
         .status(HttpStatus.INTERNAL_SERVER_ERROR)
-        .json({ error: 'Server error' });
+        .json({ error: 'Internal server error' });
     }
   }
 }

@@ -25,6 +25,12 @@ export class TransactionsController {
     return this.service.findAll(userId);
   }
 
+  @Get('status/:transactionId')
+  @ApiOperation({ summary: 'Get transaction status by transaction ID' })
+  async getTransactionStatus(@Param('transactionId') transactionId: string) {
+    return await this.service.getTransactionById(transactionId);
+  }
+
   @Patch(':id')
   @ApiOperation({ summary: 'Update a transaction status' })
   update(@Param('id') id: string, @Body() dto: UpdateTransactionDto) {
