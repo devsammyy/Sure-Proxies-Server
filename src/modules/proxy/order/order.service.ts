@@ -490,21 +490,31 @@ export class ProxyOrderService {
       console.log('📝 [PURCHASE] Transaction created:', transaction.id);
 
       // Save pending purchase with all order details
+      // Note: Filter out undefined values to avoid Firestore errors
+      const options: any = {};
+      if (model.quantity !== undefined) options.quantity = model.quantity;
+      if (model.period !== undefined) options.period = model.period;
+      if (model.autoExtend !== undefined) options.autoExtend = model.autoExtend;
+      if (model.traffic !== undefined) options.traffic = model.traffic;
+      if (model.country !== undefined) options.country = model.country;
+      if (model.ispId !== undefined) options.ispId = model.ispId;
+
       const pendingData: PendingDataModel = {
         userId: model.userId,
         serviceId,
-        planId: model.planId,
+        ...(model.planId && { planId: model.planId }), // Only include if defined
         pricePaid: profitPrice,
-        expectedPrice: model.expectedPrice, // Store for validation in webhook
-        options: {
-          quantity: model.quantity,
-          period: model.period,
-          autoExtend: model.autoExtend,
-          traffic: model.traffic,
-          country: model.country,
-          ispId: model.ispId,
-        },
-      };
+        ...(model.expectedPrice !== undefined &&
+          model.expectedPrice !== null && {
+            expectedPrice: model.expectedPrice,
+          }), // Store for validation in webhook
+        options,
+      } as PendingDataModel;
+
+      console.log(
+        '💾 [PURCHASE] Pending data to save:',
+        JSON.stringify(pendingData, null, 2),
+      );
 
       await db
         .collection('pending_purchases')
@@ -638,17 +648,39 @@ export class ProxyOrderService {
       }
 
       // Execute the external proxy API (outside transaction)
+      // Build payload, only including defined values
+      const executePayload: any = {};
+
+      if (pending.planId !== undefined) {
+        executePayload.planId = pending.planId;
+      }
+      if (pending.options.quantity !== undefined) {
+        executePayload.quantity = pending.options.quantity;
+      }
+      if (pending.options.period !== undefined) {
+        executePayload.period = pending.options.period;
+      }
+      if (pending.options.autoExtend !== undefined) {
+        executePayload.autoExtend = pending.options.autoExtend;
+      }
+      if (pending.options.traffic !== undefined) {
+        executePayload.traffic = pending.options.traffic;
+      }
+      if (pending.options.country !== undefined) {
+        executePayload.country = pending.options.country;
+      }
+      if (pending.options.ispId !== undefined) {
+        executePayload.ispId = pending.options.ispId;
+      }
+
+      console.log(
+        '🚀 [FINALIZE] Execute payload:',
+        JSON.stringify(executePayload, null, 2),
+      );
+
       const executeResponse = await axios.post<Record<string, unknown>>(
         `${this.apiBaseUrl}/${pending.serviceId}/execute`,
-        {
-          planId: pending.planId,
-          quantity: pending.options.quantity ?? 0,
-          period: pending.options.period ?? {},
-          autoExtend: pending.options.autoExtend ?? {},
-          traffic: pending.options.traffic ?? 0,
-          country: pending.options.country,
-          ispId: pending.options.ispId,
-        },
+        executePayload,
         {
           headers: {
             'X-Api-Key': process.env.PROXY_API_KEY as string,

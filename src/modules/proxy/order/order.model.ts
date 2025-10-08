@@ -15,7 +15,7 @@ export class PurchaseOrderModel {
   userId: string;
   serviceId: string;
 
-  planId: string;
+  planId?: string; // Optional for traffic-only services
   profitPrice: number;
   status: 'pending' | 'active' | 'expired';
   createdAt: Date;
@@ -72,7 +72,7 @@ export class PendingOptions {
 export class PendingDataModel {
   userId: string;
   serviceId: string;
-  planId: string;
+  planId?: string; // Optional for traffic-only services
   pricePaid: number;
   expectedPrice?: number; // Expected price in Naira for validation
   options: PendingOptions;
