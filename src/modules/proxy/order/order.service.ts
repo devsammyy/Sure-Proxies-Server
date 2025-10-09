@@ -250,14 +250,11 @@ export class ProxyOrderService {
       const requiresPlanOnly = false;
 
       if (normalizedId === 'dedicated-mobile') {
-        // Dedicated mobile: provider rejects quantity & country (empty list) and may require period in singular unit naming
+        // Dedicated mobile: requires planId, period (value only, no unit), and optional country
         payload.planId = model?.planId || 'dedicated';
         if (model?.period) {
-          const unit =
-            (model.period.unit === 'days' && 'day') ||
-            (model.period.unit === 'months' && 'month') ||
-            model.period.unit;
-          payload.period = { unit, value: model.period.value };
+          // Provider API expects only the value for dedicated-mobile (e.g., {value: 7})
+          payload.period = { value: model.period.value };
         }
         if (model?.country) payload.country = model.country; // allow future optional country
       } else if (requiresTraffic) {
@@ -339,9 +336,22 @@ export class ProxyOrderService {
         );
       }
 
-      // Sanitize payload: remove null/undefined
+      // Sanitize payload: remove null/undefined and empty objects
       Object.keys(payload).forEach((k) => {
-        if (payload[k] == null) delete payload[k];
+        const value = payload[k];
+        if (value == null) {
+          delete payload[k];
+        } else if (
+          typeof value === 'object' &&
+          !Array.isArray(value) &&
+          Object.keys(value).length === 0
+        ) {
+          // Remove empty objects like period: {}
+          console.warn(
+            `⚠️ [PRICE] Removing empty object for field: ${k} in payload`,
+          );
+          delete payload[k];
+        }
       });
 
       // Final defensive: remove period for any branch that should not send it
