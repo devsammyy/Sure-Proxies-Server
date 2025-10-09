@@ -175,9 +175,38 @@ export class AuthService {
 
       (req as unknown as { user: typeof userData }).user = userData;
       return true;
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error verifying token: ', error);
-      throw new UnauthorizedException('Invalid or expired token');
+
+      // Check if token is expired
+      if (
+        error?.errorInfo?.code === 'auth/id-token-expired' ||
+        error?.code === 'auth/id-token-expired'
+      ) {
+        throw new UnauthorizedException({
+          message: 'Token expired',
+          code: 'TOKEN_EXPIRED',
+          statusCode: 401,
+        });
+      }
+
+      // Check if token is revoked
+      if (
+        error?.errorInfo?.code === 'auth/id-token-revoked' ||
+        error?.code === 'auth/id-token-revoked'
+      ) {
+        throw new UnauthorizedException({
+          message: 'Token revoked',
+          code: 'TOKEN_REVOKED',
+          statusCode: 401,
+        });
+      }
+
+      throw new UnauthorizedException({
+        message: 'Invalid or expired token',
+        code: 'TOKEN_INVALID',
+        statusCode: 401,
+      });
     }
   }
 }

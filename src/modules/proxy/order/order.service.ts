@@ -225,6 +225,15 @@ export class ProxyOrderService {
       // Build provider-specific payload
       const payload: Record<string, unknown> = {};
       const normalizedId = serviceId.toLowerCase();
+
+      // Ensure period unit is plural (fix frontend singular form if sent)
+      if (model?.period?.unit) {
+        const unit = model.period.unit as string;
+        if (unit === 'day') (model.period.unit as any) = 'days';
+        else if (unit === 'month') (model.period.unit as any) = 'months';
+        else if (unit === 'year') (model.period.unit as any) = 'years';
+      }
+
       // Heuristic classification: widen support without hardcoding every id
       const requiresTraffic =
         /rotating/.test(normalizedId) &&
