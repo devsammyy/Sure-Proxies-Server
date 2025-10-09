@@ -239,13 +239,11 @@ export class ProxyOrderService {
         /rotating/.test(normalizedId) &&
         (normalizedId.includes('mobile') ||
           normalizedId.includes('residential'));
-      // Any static (non-rotating) ipv6 variant (datacenter or residential) that is not rotating requires packageId + country + period
+      // Any static (non-rotating) ipv6 variant (datacenter or residential) requires packageId + period (country is optional)
       const requiresPackageCountry =
         normalizedId.includes('ipv6') &&
         normalizedId.includes('static') &&
         !normalizedId.includes('rotating');
-      const ipv6Residential =
-        requiresPackageCountry && normalizedId.includes('residential');
       // Country-required services (static/dedicated mobile/residential, non-rotating, non-ipv6) now support period
       const countryRequiresPeriod =
         (normalizedId.includes('static') ||
@@ -279,16 +277,10 @@ export class ProxyOrderService {
         // NOTE: Provider returns period.NOT_ALLOWED for rotating/traffic-only services.
         if (model?.country) payload.country = model.country; // some providers may accept country filter
       } else if (requiresPackageCountry) {
-        // Static IPv6 variants: require packageId; country required for datacenter, optional for residential
+        // Static IPv6 variants: require packageId; country is optional for all IPv6 variants
         if (!model?.packageId) {
           throw new HttpException(
             { message: 'packageId is required for static-ipv6 service' },
-            HttpStatus.BAD_REQUEST,
-          );
-        }
-        if (!model?.country && !ipv6Residential) {
-          throw new HttpException(
-            { message: 'country is required for static-ipv6 service' },
             HttpStatus.BAD_REQUEST,
           );
         }
@@ -367,14 +359,9 @@ export class ProxyOrderService {
       if (requiresTraffic) {
         if ('period' in payload) delete payload.period;
       }
-      // If branch requires country and still missing, abort before provider call
-      if (requiresPackageCountry && !payload.country && !ipv6Residential) {
-        // For non-residential static ipv6 variants, country remains mandatory
-        throw new HttpException(
-          { message: 'country missing before provider request' },
-          HttpStatus.BAD_REQUEST,
-        );
-      }
+      // Country is now optional for all IPv6 variants (datacenter and residential)
+      // No validation needed here - provider will handle missing country if required
+
       if (requiresTraffic && typeof payload['traffic'] !== 'number') {
         throw new HttpException(
           { message: 'traffic missing before provider request' },
