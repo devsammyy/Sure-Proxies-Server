@@ -7,6 +7,7 @@ import { AuthModule } from 'src/modules/auth/auth.module';
 import { PaymentpointModule } from 'src/modules/paymentpoint/paymentpoint.module';
 import { ProxyOrderModule } from 'src/modules/proxy/order/order.module';
 import { TransactionModule } from 'src/modules/transaction/transaction.module';
+import { WalletModule } from 'src/modules/wallet/wallet.module';
 import { WebhookModule } from 'src/modules/webhook/webhook.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -25,6 +26,7 @@ import { UserModule } from './modules/user/user.module';
     TransactionModule,
     PaymentpointModule,
     WebhookModule,
+    WalletModule,
   ],
   controllers: [AppController],
   providers: [AppService, AuthGuard],

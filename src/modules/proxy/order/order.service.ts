@@ -15,6 +15,7 @@ import {
 } from 'src/modules/proxy/order/order.model';
 import { Transaction } from 'src/modules/transaction/transaction.model';
 import { TransactionsService } from 'src/modules/transaction/transaction.service';
+import { WalletService } from 'src/modules/wallet/wallet.service';
 import { PriceInputDto, ProxyOrderPurchaseInputDto } from './order.dto';
 import { ProxyOrderModel } from './order.model';
 
@@ -25,6 +26,7 @@ export class ProxyOrderService {
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly paymentPointService: PaymentpointService,
+    private readonly walletService: WalletService,
   ) {}
 
   /** Fetch pricing config from Firestore */

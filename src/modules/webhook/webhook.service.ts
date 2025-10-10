@@ -4,6 +4,7 @@ import * as crypto from 'crypto';
 import { db } from 'src/main';
 import { ProxyOrderService } from 'src/modules/proxy/order/order.service';
 import { TransactionsService } from 'src/modules/transaction/transaction.service';
+import { WalletService } from 'src/modules/wallet/wallet.service';
 
 export type WebhookPayload = {
   transaction_id?: string;
@@ -50,6 +51,7 @@ export class WebhookService {
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly proxyOrderService: ProxyOrderService,
+    private readonly walletService: WalletService,
   ) {}
 
   /**
@@ -223,6 +225,13 @@ export class WebhookService {
     const { transaction_id, amount_paid, settlement_amount, settlement_fee } =
       payload;
 
+    // Get full transaction details to check type
+    const txSnapshot = await db.collection('transactions').doc(txId).get();
+    const fullTxData = txSnapshot.data();
+    const transactionType = (fullTxData?.type as string) || null;
+
+    console.log('🔍 [WEBHOOK SERVICE] Transaction type:', transactionType);
+
     // Update transaction status
     await this.transactionsService.update(txId, { status: 'SUCCESS' });
     console.log('✅ [WEBHOOK SERVICE] Transaction marked as SUCCESS:', txId);
@@ -242,30 +251,60 @@ export class WebhookService {
 
     console.log('📚 [WEBHOOK SERVICE] Transaction history entry created');
 
-    // Finalize purchase (create proxies)
-    try {
-      console.log('🚀 [WEBHOOK SERVICE] Calling finalizePurchase...');
-      const purchase = await this.proxyOrderService.finalizePurchase(txId);
+    // Handle based on transaction type
+    if (transactionType === 'DEPOSIT') {
+      // This is a wallet deposit
+      console.log('💳 [WEBHOOK SERVICE] Processing wallet deposit...');
+      try {
+        const depositAmount =
+          (fullTxData?.amount as number) || amount_paid || 0;
 
-      if (purchase) {
-        console.log('✅ [WEBHOOK SERVICE] Purchase finalized successfully:', {
-          transactionId: txId,
-          purchaseId: purchase.id,
-        });
-      } else {
-        console.log(
-          '⚠️  [WEBHOOK SERVICE] No pending purchase found for transaction:',
+        await this.walletService.processDeposit(
+          txData.userId,
           txId,
+          depositAmount,
+        );
+
+        console.log(
+          '✅ [WEBHOOK SERVICE] Wallet deposit processed successfully:',
+          {
+            userId: txData.userId,
+            amount: depositAmount,
+          },
+        );
+      } catch (err) {
+        console.error(
+          '❌ [WEBHOOK SERVICE] Error processing wallet deposit:',
+          txId,
+          err,
         );
       }
-    } catch (err) {
-      console.error(
-        '❌ [WEBHOOK SERVICE] Error finalizing purchase for transaction:',
-        txId,
-        err,
-      );
-      // Note: Transaction status remains SUCCESS even if finalization fails
-      // This allows for manual retry or investigation
+    } else {
+      // This is a proxy purchase
+      console.log('🚀 [WEBHOOK SERVICE] Processing proxy purchase...');
+      try {
+        const purchase = await this.proxyOrderService.finalizePurchase(txId);
+
+        if (purchase) {
+          console.log('✅ [WEBHOOK SERVICE] Purchase finalized successfully:', {
+            transactionId: txId,
+            purchaseId: purchase.id,
+          });
+        } else {
+          console.log(
+            '⚠️  [WEBHOOK SERVICE] No pending purchase found for transaction:',
+            txId,
+          );
+        }
+      } catch (err) {
+        console.error(
+          '❌ [WEBHOOK SERVICE] Error finalizing purchase for transaction:',
+          txId,
+          err,
+        );
+        // Note: Transaction status remains SUCCESS even if finalization fails
+        // This allows for manual retry or investigation
+      }
     }
   }
 
