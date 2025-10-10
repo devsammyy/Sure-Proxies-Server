@@ -12,9 +12,9 @@ export class Transaction {
 
   @ApiProperty({
     description: 'Type of transaction',
-    enum: ['DEPOSIT', 'WITHDRAWAL', 'INVESTMENT', 'TRANSFER'],
+    enum: ['DEPOSIT', 'WITHDRAWAL', 'INVESTMENT', 'TRANSFER', 'PURCHASE'],
   })
-  type: 'DEPOSIT' | 'WITHDRAWAL' | 'INVESTMENT' | 'TRANSFER';
+  type: 'DEPOSIT' | 'WITHDRAWAL' | 'INVESTMENT' | 'TRANSFER' | 'PURCHASE';
 
   @ApiProperty({ description: 'Amount of money involved in this transaction' })
   amount: number;

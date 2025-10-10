@@ -18,9 +18,10 @@ export class CreateTransactionDto {
       'INVESTMENT',
       'TRANSFER',
       'INVESTMENT_SETTLEMENT',
+      'PURCHASE',
     ],
   })
-  type: 'DEPOSIT' | 'WITHDRAWAL' | 'INVESTMENT' | 'TRANSFER';
+  type: 'DEPOSIT' | 'WITHDRAWAL' | 'INVESTMENT' | 'TRANSFER' | 'PURCHASE';
 
   @ApiProperty({ description: 'Amount involved in the transaction' })
   amount: number;

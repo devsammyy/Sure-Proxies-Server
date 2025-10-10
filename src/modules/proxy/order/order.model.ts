@@ -73,7 +73,7 @@ export class PendingDataModel {
   userId: string;
   serviceId: string;
   planId?: string; // Optional for traffic-only services
-  pricePaid: number;
+  pricePaid: number; // Price in USD (for proxy API)
   expectedPrice?: number; // Expected price in Naira for validation
   options: PendingOptions;
 }

@@ -13,7 +13,6 @@ import {
   ServiceDetailsResponseModel,
   TxDoc,
 } from 'src/modules/proxy/order/order.model';
-import { Transaction } from 'src/modules/transaction/transaction.model';
 import { TransactionsService } from 'src/modules/transaction/transaction.service';
 import { WalletService } from 'src/modules/wallet/wallet.service';
 import { PriceInputDto, ProxyOrderPurchaseInputDto } from './order.dto';
@@ -47,52 +46,61 @@ export class ProxyOrderService {
   }
 
   /** Fetch current USD to NGN exchange rate from Firestore or external API */
-  private async getExchangeRate(): Promise<number> {
-    try {
-      // Try to get from Firestore cache first
-      const rateDoc = await db.collection('config').doc('exchange_rate').get();
+  async getExchangeRate(): Promise<number> {
+    // Check if cached rate exists and is less than 1 hour old
+    const cacheRef = db.collection('config').doc('exchange-rate');
+    const cacheSnap = await cacheRef.get();
 
-      if (rateDoc.exists) {
-        const data = rateDoc.data();
-        const cachedRate = data?.rate;
-        const lastUpdated = data?.lastUpdated?.toDate();
+    if (cacheSnap.exists) {
+      const data = cacheSnap.data();
+      if (data?.lastUpdated && data?.rate) {
+        let lastUpdated: Date | null = null;
+        if (data.lastUpdated instanceof Date) {
+          lastUpdated = data.lastUpdated;
+        } else if (
+          data.lastUpdated &&
+          typeof data.lastUpdated.toDate === 'function'
+        ) {
+          try {
+            lastUpdated = (data.lastUpdated as { toDate(): Date }).toDate();
+          } catch (e) {
+            console.warn('Failed to convert timestamp to date:', e);
+          }
+        }
 
-        // Use cached rate if less than 1 hour old
-        if (cachedRate && lastUpdated) {
-          const hoursSinceUpdate =
+        if (lastUpdated && lastUpdated instanceof Date) {
+          const hoursOld =
             (Date.now() - lastUpdated.getTime()) / (1000 * 60 * 60);
-          if (hoursSinceUpdate < 1) {
-            console.log('💱 [EXCHANGE RATE] Using cached rate:', cachedRate);
+          if (hoursOld < 1) {
+            const cachedRate = data.rate as number;
             return cachedRate;
           }
         }
       }
+    }
 
-      // Fetch fresh rate from external API
-      console.log('💱 [EXCHANGE RATE] Fetching fresh rate from API...');
+    // Fetch new rate from external API
+    try {
       const response = await axios.get(
         'https://api.exchangerate-api.com/v4/latest/USD',
       );
-      const rate = response.data?.rates?.NGN;
+      const rate = response.data?.rates?.NGN as number;
 
-      if (!rate || typeof rate !== 'number') {
-        console.warn(
-          '⚠️  [EXCHANGE RATE] Invalid rate from API, using fallback',
-        );
-        return 1500; // Fallback rate
+      if (!rate) {
+        throw new Error('Exchange rate not available');
       }
 
       // Cache the rate
-      await db.collection('config').doc('exchange_rate').set({
+      await cacheRef.set({
         rate,
         lastUpdated: new Date(),
       });
 
-      console.log('✅ [EXCHANGE RATE] Fresh rate fetched and cached:', rate);
       return rate;
     } catch (error) {
-      console.error('❌ [EXCHANGE RATE] Error fetching rate:', error);
-      return 1500; // Fallback rate
+      console.error('Failed to fetch exchange rate:', error);
+      // Return fallback rate (you should set this to a reasonable default)
+      return 1600; // Fallback USD to NGN rate
     }
   }
 
@@ -113,10 +121,6 @@ export class ProxyOrderService {
    */
   private async ensureVirtualAccount(userId: string): Promise<void> {
     try {
-      console.log(
-        '🏦 [VIRTUAL ACCOUNT] Checking if user has virtual account...',
-      );
-
       const virtualAccountRef = db.collection('virtual_accounts').doc(userId);
       const virtualAccountSnap = await virtualAccountRef.get();
 
@@ -140,13 +144,17 @@ export class ProxyOrderService {
       // Create virtual account via PaymentPoint API
       const virtualAccount =
         await this.paymentPointService.createVirtualAccount({
-          email: userData.email,
-          name: userData.fullName,
-          phoneNumber: userData.phoneNumber,
+          email: userData?.email,
+          name: userData?.fullName,
+          phoneNumber: userData?.phoneNumber,
         });
 
       // Save to database
-      await virtualAccountRef.set(virtualAccount as any);
+      await virtualAccountRef.set({
+        ...(virtualAccount || {}),
+        userId,
+        createdAt: new Date(),
+      });
 
       console.log(
         '✅ [VIRTUAL ACCOUNT] Virtual account created successfully for user:',
@@ -452,7 +460,7 @@ export class ProxyOrderService {
   ): Promise<{ transactionId: string; amount: number }> {
     try {
       console.log('💰 [PURCHASE] Starting purchase for service:', serviceId);
-      console.log('📋 [PURCHASE] User ID:', model.userId);
+
       console.log(
         '🎯 [PURCHASE] Expected price from frontend:',
         model.expectedPrice,
@@ -478,7 +486,7 @@ export class ProxyOrderService {
       // Store expectedPrice for validation AFTER webhook confirms payment
       if (model.expectedPrice !== undefined && model.expectedPrice !== null) {
         console.log(
-          '� [PURCHASE] Expected price from frontend (NGN):',
+          '💰 [PURCHASE] Expected price from frontend (NGN):',
           model.expectedPrice,
         );
         console.log(
@@ -486,14 +494,20 @@ export class ProxyOrderService {
         );
       }
 
-      const transaction: Transaction = await this.transactionsService.create(
-        model.userId,
-        {
-          type: 'DEPOSIT',
-          amount: profitPrice,
+      let transaction: { id: string; [key: string]: any };
+      try {
+        transaction = await this.transactionsService.create(model.userId, {
+          type: 'PURCHASE', // Proxy purchases are 'PURCHASE' type
+          amount: profitPrice, // Store USD amount (same as deposits)
           reference: crypto.randomUUID(),
-        },
-      );
+        });
+      } catch (error) {
+        console.error('Failed to create transaction:', error);
+        throw new HttpException(
+          'Failed to create transaction',
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
 
       console.log('📝 [PURCHASE] Transaction created:', transaction.id);
 
@@ -511,7 +525,7 @@ export class ProxyOrderService {
         userId: model.userId,
         serviceId,
         ...(model.planId && { planId: model.planId }), // Only include if defined
-        pricePaid: profitPrice,
+        pricePaid: profitPrice, // Store USD amount for proxy API
         ...(model.expectedPrice !== undefined &&
           model.expectedPrice !== null && {
             expectedPrice: model.expectedPrice,
@@ -535,7 +549,10 @@ export class ProxyOrderService {
       );
       console.log('✨ [PURCHASE] Purchase initialization complete');
 
-      return { transactionId: transaction.id, amount: profitPrice };
+      return {
+        transactionId: transaction.id,
+        amount: profitPrice, // Return USD amount (consistent with storage)
+      };
     } catch (error) {
       console.error('❌ [PURCHASE] Purchase error:', error);
       throw new HttpException(

@@ -21,7 +21,9 @@ export class ApiClient {
         },
       });
       if (response.status !== 200) {
-        throw new Error(`Failed request: ${response.status}`);
+        throw new Error(
+          'Service temporarily unavailable. Please try again later.',
+        );
       }
       return response.data;
     } catch (error) {
@@ -39,7 +41,7 @@ export class ApiClient {
         },
       });
       if (response.status !== 201) {
-        throw new Error(`Failed to create: ${response.status}`);
+        throw new Error('Unable to create resource. Please try again.');
       }
       return response.data;
     } catch (error) {
@@ -57,7 +59,7 @@ export class ApiClient {
         },
       });
       if (response.status !== 200) {
-        throw new Error(`Failed to patch: ${response.status}`);
+        throw new Error('Unable to update resource. Please try again.');
       }
       return response.data;
     } catch (error) {
@@ -75,7 +77,7 @@ export class ApiClient {
         },
       });
       if (response.status !== 200) {
-        throw new Error(`Failed to patch: ${response.status}`);
+        throw new Error('Unable to delete resource. Please try again.');
       }
       return response.data;
     } catch (error) {
@@ -94,7 +96,7 @@ export class ApiClient {
         },
       });
       if (response.status !== 201) {
-        throw new Error(`Failed to create: ${response.status}`);
+        throw new Error('Payment processing failed. Please try again.');
       }
       return response.data;
     } catch (error) {
