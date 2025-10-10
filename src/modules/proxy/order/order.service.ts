@@ -15,6 +15,7 @@ import {
 } from 'src/modules/proxy/order/order.model';
 import { Transaction } from 'src/modules/transaction/transaction.model';
 import { TransactionsService } from 'src/modules/transaction/transaction.service';
+import { WalletService } from 'src/modules/wallet/wallet.service';
 import { PriceInputDto, ProxyOrderPurchaseInputDto } from './order.dto';
 import { ProxyOrderModel } from './order.model';
 
@@ -25,6 +26,7 @@ export class ProxyOrderService {
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly paymentPointService: PaymentpointService,
+    private readonly walletService: WalletService,
   ) {}
 
   /** Fetch pricing config from Firestore */
@@ -225,18 +227,25 @@ export class ProxyOrderService {
       // Build provider-specific payload
       const payload: Record<string, unknown> = {};
       const normalizedId = serviceId.toLowerCase();
+
+      // Ensure period unit is plural (fix frontend singular form if sent)
+      if (model?.period?.unit) {
+        const unit = model.period.unit as string;
+        if (unit === 'day') (model.period.unit as any) = 'days';
+        else if (unit === 'month') (model.period.unit as any) = 'months';
+        else if (unit === 'year') (model.period.unit as any) = 'years';
+      }
+
       // Heuristic classification: widen support without hardcoding every id
       const requiresTraffic =
         /rotating/.test(normalizedId) &&
         (normalizedId.includes('mobile') ||
           normalizedId.includes('residential'));
-      // Any static (non-rotating) ipv6 variant (datacenter or residential) that is not rotating requires packageId + country + period
+      // Any static (non-rotating) ipv6 variant (datacenter or residential) requires packageId + period (country is optional)
       const requiresPackageCountry =
         normalizedId.includes('ipv6') &&
         normalizedId.includes('static') &&
         !normalizedId.includes('rotating');
-      const ipv6Residential =
-        requiresPackageCountry && normalizedId.includes('residential');
       // Country-required services (static/dedicated mobile/residential, non-rotating, non-ipv6) now support period
       const countryRequiresPeriod =
         (normalizedId.includes('static') ||
@@ -250,14 +259,11 @@ export class ProxyOrderService {
       const requiresPlanOnly = false;
 
       if (normalizedId === 'dedicated-mobile') {
-        // Dedicated mobile: provider rejects quantity & country (empty list) and may require period in singular unit naming
+        // Dedicated mobile: requires planId, period (value only, no unit), and optional country
         payload.planId = model?.planId || 'dedicated';
         if (model?.period) {
-          const unit =
-            (model.period.unit === 'days' && 'day') ||
-            (model.period.unit === 'months' && 'month') ||
-            model.period.unit;
-          payload.period = { unit, value: model.period.value };
+          // Provider API expects only the value for dedicated-mobile (e.g., {value: 7})
+          payload.period = { value: model.period.value };
         }
         if (model?.country) payload.country = model.country; // allow future optional country
       } else if (requiresTraffic) {
@@ -273,16 +279,10 @@ export class ProxyOrderService {
         // NOTE: Provider returns period.NOT_ALLOWED for rotating/traffic-only services.
         if (model?.country) payload.country = model.country; // some providers may accept country filter
       } else if (requiresPackageCountry) {
-        // Static IPv6 variants: require packageId; country required for datacenter, optional for residential
+        // Static IPv6 variants: require packageId; country is optional for all IPv6 variants
         if (!model?.packageId) {
           throw new HttpException(
             { message: 'packageId is required for static-ipv6 service' },
-            HttpStatus.BAD_REQUEST,
-          );
-        }
-        if (!model?.country && !ipv6Residential) {
-          throw new HttpException(
-            { message: 'country is required for static-ipv6 service' },
             HttpStatus.BAD_REQUEST,
           );
         }
@@ -339,23 +339,31 @@ export class ProxyOrderService {
         );
       }
 
-      // Sanitize payload: remove null/undefined
+      // Sanitize payload: remove null/undefined and empty objects
       Object.keys(payload).forEach((k) => {
-        if (payload[k] == null) delete payload[k];
+        const value = payload[k];
+        if (value == null) {
+          delete payload[k];
+        } else if (
+          typeof value === 'object' &&
+          !Array.isArray(value) &&
+          Object.keys(value).length === 0
+        ) {
+          // Remove empty objects like period: {}
+          console.warn(
+            `⚠️ [PRICE] Removing empty object for field: ${k} in payload`,
+          );
+          delete payload[k];
+        }
       });
 
       // Final defensive: remove period for any branch that should not send it
       if (requiresTraffic) {
         if ('period' in payload) delete payload.period;
       }
-      // If branch requires country and still missing, abort before provider call
-      if (requiresPackageCountry && !payload.country && !ipv6Residential) {
-        // For non-residential static ipv6 variants, country remains mandatory
-        throw new HttpException(
-          { message: 'country missing before provider request' },
-          HttpStatus.BAD_REQUEST,
-        );
-      }
+      // Country is now optional for all IPv6 variants (datacenter and residential)
+      // No validation needed here - provider will handle missing country if required
+
       if (requiresTraffic && typeof payload['traffic'] !== 'number') {
         throw new HttpException(
           { message: 'traffic missing before provider request' },

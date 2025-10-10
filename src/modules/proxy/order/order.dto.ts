@@ -267,4 +267,14 @@ export class PurchaseOrderInputDto {
   @IsNumber()
   @Min(0)
   expectedPrice?: number;
+
+  @ApiProperty({
+    description: 'Payment method to use for this purchase',
+    required: false,
+    enum: ['wallet', 'gateway'],
+    example: 'gateway',
+  })
+  @IsOptional()
+  @IsString()
+  paymentMethod?: 'wallet' | 'gateway';
 }
