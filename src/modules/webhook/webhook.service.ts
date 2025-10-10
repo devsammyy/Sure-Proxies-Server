@@ -406,6 +406,7 @@ export class WebhookService {
 
     if (
       transaction_status === 'success' ||
+      transaction_status === 'successful' ||
       transaction_status === 'completed'
     ) {
       console.log('✅ [WEBHOOK SERVICE] Processing as SUCCESSFUL payment...');

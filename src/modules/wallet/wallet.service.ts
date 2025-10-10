@@ -102,7 +102,7 @@ export class WalletService {
         updatedAt: new Date(),
       });
 
-      // Find and update wallet transaction status
+      // Find and update wallet transaction status, or create new one
       const walletTxSnapshot = await db
         .collection(this.walletTransactionCollection)
         .where('referenceId', '==', transactionId)
@@ -111,6 +111,7 @@ export class WalletService {
         .get();
 
       if (!walletTxSnapshot.empty) {
+        // Update existing transaction
         const doc = walletTxSnapshot.docs[0];
         transaction.update(
           db.collection(this.walletTransactionCollection).doc(doc.id),
@@ -118,6 +119,33 @@ export class WalletService {
             status: 'SUCCESS',
             updatedAt: new Date(),
           },
+        );
+        console.log(
+          `✅ [WALLET] Updated existing wallet transaction ${doc.id} to SUCCESS`,
+        );
+      } else {
+        // Create new wallet transaction (for direct webhook cases)
+        const walletTxId = db
+          .collection(this.walletTransactionCollection)
+          .doc().id;
+        const walletTransaction = {
+          id: walletTxId,
+          walletId: wallet.id,
+          userId,
+          type: 'DEPOSIT' as const,
+          amount,
+          status: 'SUCCESS' as const,
+          description: `Wallet deposit of $${amount}`,
+          referenceId: transactionId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        transaction.set(
+          db.collection(this.walletTransactionCollection).doc(walletTxId),
+          walletTransaction,
+        );
+        console.log(
+          `✅ [WALLET] Created new wallet transaction ${walletTxId} with SUCCESS status`,
         );
       }
     });
@@ -287,6 +315,8 @@ export class WalletService {
   }
 
   async getTransactions(userId: string): Promise<WalletTransaction[]> {
+    console.log(`🔍 [WALLET] Getting transactions for user: ${userId}`);
+
     const snapshot = await db
       .collection(this.walletTransactionCollection)
       .where('userId', '==', userId)
@@ -294,7 +324,63 @@ export class WalletService {
       .limit(50)
       .get();
 
-    return snapshot.docs.map((doc) => doc.data() as WalletTransaction);
+    const transactions = snapshot.docs.map((doc) => {
+      const data = doc.data() as WalletTransaction;
+
+      // Convert any Firestore timestamps to proper dates
+      let createdAt: Date;
+      let updatedAt: Date;
+
+      try {
+        // Handle createdAt
+        if (data.createdAt && (data.createdAt as any).toDate) {
+          createdAt = (data.createdAt as any).toDate();
+        } else if (data.createdAt instanceof Date) {
+          createdAt = data.createdAt;
+        } else {
+          createdAt = new Date(data.createdAt as string);
+        }
+
+        // Validate the date
+        if (isNaN(createdAt.getTime())) {
+          createdAt = new Date();
+        }
+      } catch {
+        createdAt = new Date();
+      }
+
+      try {
+        // Handle updatedAt
+        if (data.updatedAt && (data.updatedAt as any).toDate) {
+          updatedAt = (data.updatedAt as any).toDate();
+        } else if (data.updatedAt instanceof Date) {
+          updatedAt = data.updatedAt;
+        } else {
+          updatedAt = new Date(data.updatedAt as string);
+        }
+
+        // Validate the date
+        if (isNaN(updatedAt.getTime())) {
+          updatedAt = new Date();
+        }
+      } catch {
+        updatedAt = new Date();
+      }
+
+      return {
+        ...data,
+        id: doc.id,
+        createdAt,
+        updatedAt,
+      };
+    });
+
+    console.log(
+      `📊 [WALLET] Found ${transactions.length} transactions for user ${userId}`,
+    );
+    console.log(`📊 [WALLET] Transactions:`, transactions);
+
+    return transactions;
   }
 
   /**
@@ -392,10 +478,19 @@ export class WalletService {
       updatedAt: new Date(),
     };
 
+    console.log(
+      `💾 [WALLET] Creating wallet transaction:`,
+      JSON.stringify(transaction, null, 2),
+    );
+
     await db
       .collection(this.walletTransactionCollection)
       .doc(id)
       .set(transaction);
+
+    console.log(
+      `✅ [WALLET] Wallet transaction created successfully with ID: ${id}`,
+    );
 
     return transaction;
   }

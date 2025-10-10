@@ -24,6 +24,9 @@ export class WalletController {
   @Get('transactions')
   getTransactions(@Request() req: any) {
     const userId = req.user.uid as string;
+    console.log(
+      `🌐 [WALLET-CONTROLLER] GET /wallet/transactions for user: ${userId}`,
+    );
     return this.walletService.getTransactions(userId);
   }
 
