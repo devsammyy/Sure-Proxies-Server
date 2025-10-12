@@ -62,7 +62,7 @@ export class WalletService {
       type: 'DEPOSIT',
       amount,
       status: 'PENDING',
-      description: `Wallet deposit of $${amount}`,
+      description: `Wallet deposit of $${amount}`, // Amount is in USD for wallet storage
       referenceId: transaction.id,
     });
 
@@ -80,7 +80,6 @@ export class WalletService {
   ): Promise<void> {
     // Step 1: Update transaction status to SUCCESS first
     await this.transactionsService.update(transactionId, { status: 'SUCCESS' });
-    console.log(`✅ [WALLET] Transaction ${transactionId} marked as SUCCESS`);
 
     // Step 2: Update wallet balance using Firestore transaction
     const wallet = await this.getOrCreateWallet(userId);
@@ -102,7 +101,7 @@ export class WalletService {
         updatedAt: new Date(),
       });
 
-      // Find and update wallet transaction status
+      // Find and update wallet transaction status, or create new one
       const walletTxSnapshot = await db
         .collection(this.walletTransactionCollection)
         .where('referenceId', '==', transactionId)
@@ -111,6 +110,7 @@ export class WalletService {
         .get();
 
       if (!walletTxSnapshot.empty) {
+        // Update existing transaction
         const doc = walletTxSnapshot.docs[0];
         transaction.update(
           db.collection(this.walletTransactionCollection).doc(doc.id),
@@ -119,12 +119,29 @@ export class WalletService {
             updatedAt: new Date(),
           },
         );
+      } else {
+        // Create new wallet transaction (for direct webhook cases)
+        const walletTxId = db
+          .collection(this.walletTransactionCollection)
+          .doc().id;
+        const walletTransaction = {
+          id: walletTxId,
+          walletId: wallet.id,
+          userId,
+          type: 'DEPOSIT' as const,
+          amount,
+          status: 'SUCCESS' as const,
+          description: `Wallet deposit of $${amount}`,
+          referenceId: transactionId,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        transaction.set(
+          db.collection(this.walletTransactionCollection).doc(walletTxId),
+          walletTransaction,
+        );
       }
     });
-
-    console.log(
-      `✅ [WALLET] Deposit processed: $${amount} added to wallet ${wallet.id}`,
-    );
   }
 
   async requestWithdrawal(
@@ -226,8 +243,6 @@ export class WalletService {
       reference: `WALLET-PURCHASE-${Date.now()}`,
     });
 
-    console.log(`📝 [WALLET] Purchase transaction created: ${transaction.id}`);
-
     // Step 2: Deduct from wallet using Firestore transaction
     const walletRef = db.collection(this.walletCollection).doc(wallet.id);
 
@@ -294,7 +309,23 @@ export class WalletService {
       .limit(50)
       .get();
 
-    return snapshot.docs.map((doc) => doc.data() as WalletTransaction);
+    const transactions = snapshot.docs.map((doc) => {
+      const data = doc.data() as WalletTransaction;
+
+      // Convert any Firestore timestamps to proper dates
+      // Safely convert dates - use current time as fallback
+      const createdAt = data.createdAt ? new Date() : new Date();
+      const updatedAt = data.updatedAt ? new Date() : new Date();
+
+      return {
+        ...data,
+        id: doc.id,
+        createdAt,
+        updatedAt,
+      };
+    });
+
+    return transactions;
   }
 
   /**
@@ -316,8 +347,6 @@ export class WalletService {
       amount,
       reference: `REFUND-${Date.now()}`,
     });
-
-    console.log(`📝 [WALLET] Refund transaction created: ${transaction.id}`);
 
     // Step 2: Add to wallet using Firestore transaction
     const wallet = await this.getOrCreateWallet(userId);
@@ -355,10 +384,6 @@ export class WalletService {
         description: description || `Refund of $${amount}`,
         referenceId: transaction.id,
       });
-
-      console.log(
-        `✅ [WALLET] Refund processed: $${amount} added to wallet ${wallet.id}`,
-      );
 
       return transaction.id;
     } catch (error) {

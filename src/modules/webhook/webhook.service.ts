@@ -281,29 +281,90 @@ export class WebhookService {
       }
     } else {
       // This is a proxy purchase
-      console.log('🚀 [WEBHOOK SERVICE] Processing proxy purchase...');
+      console.log(
+        '🚀 [WEBHOOK SERVICE] Processing proxy purchase for transaction:',
+        txId,
+      );
+
       try {
+        // Validate that this is actually a purchase transaction
+        const transactionDoc = await db
+          .collection('transactions')
+          .doc(txId)
+          .get();
+
+        if (!transactionDoc.exists) {
+          console.warn(
+            '⚠️ [WEBHOOK SERVICE] Transaction document not found:',
+            txId,
+          );
+          return;
+        }
+
+        const transactionData = transactionDoc.data();
+
+        if (transactionData?.type !== 'purchase') {
+          console.warn(
+            '⚠️ [WEBHOOK SERVICE] Transaction is not a purchase type:',
+            {
+              transactionId: txId,
+              actualType: transactionData?.type as string,
+            },
+          );
+          return;
+        }
+
         const purchase = await this.proxyOrderService.finalizePurchase(txId);
 
         if (purchase) {
-          console.log('✅ [WEBHOOK SERVICE] Purchase finalized successfully:', {
-            transactionId: txId,
+          console.log(
+            '✅ [WEBHOOK SERVICE] Proxy purchase completed successfully:',
+            {
+              transactionId: txId,
+              purchaseId: purchase.id,
+              userId: purchase.userId,
+              serviceId: purchase.serviceId,
+            },
+          );
+
+          // Update transaction with purchase completion
+          await db.collection('transactions').doc(txId).update({
+            purchaseCompleted: true,
             purchaseId: purchase.id,
+            completedAt: new Date(),
           });
         } else {
-          console.log(
-            '⚠️  [WEBHOOK SERVICE] No pending purchase found for transaction:',
+          console.warn(
+            '⚠️ [WEBHOOK SERVICE] No pending purchase found for transaction:',
             txId,
           );
+
+          // Mark transaction for investigation
+          await db.collection('transactions').doc(txId).update({
+            purchaseCompletionFailed: true,
+            failureReason: 'No pending purchase found',
+            investigationRequired: true,
+          });
         }
       } catch (err) {
-        console.error(
-          '❌ [WEBHOOK SERVICE] Error finalizing purchase for transaction:',
-          txId,
-          err,
-        );
-        // Note: Transaction status remains SUCCESS even if finalization fails
-        // This allows for manual retry or investigation
+        const errorMessage =
+          err instanceof Error ? err.message : 'Unknown error occurred';
+
+        console.error('❌ [WEBHOOK SERVICE] Failed to finalize purchase:', {
+          transactionId: txId,
+          error: errorMessage,
+        });
+
+        // Record the error in the transaction for investigation
+        await db.collection('transactions').doc(txId).update({
+          purchaseCompletionFailed: true,
+          failureReason: errorMessage,
+          investigationRequired: true,
+          errorTimestamp: new Date(),
+        });
+
+        // Note: Transaction payment status remains SUCCESS as payment was confirmed
+        // The purchase finalization can be retried manually or via admin interface
       }
     }
   }
@@ -406,6 +467,7 @@ export class WebhookService {
 
     if (
       transaction_status === 'success' ||
+      transaction_status === 'successful' ||
       transaction_status === 'completed'
     ) {
       console.log('✅ [WEBHOOK SERVICE] Processing as SUCCESSFUL payment...');

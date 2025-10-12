@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import axios from 'axios';
+import axios, { AxiosInstance } from 'axios';
 import { FieldValue } from 'firebase-admin/firestore';
 import { db } from 'src/main';
 import { PaymentpointService } from 'src/modules/paymentpoint/paymentpoint.service';
@@ -13,7 +13,6 @@ import {
   ServiceDetailsResponseModel,
   TxDoc,
 } from 'src/modules/proxy/order/order.model';
-import { Transaction } from 'src/modules/transaction/transaction.model';
 import { TransactionsService } from 'src/modules/transaction/transaction.service';
 import { WalletService } from 'src/modules/wallet/wallet.service';
 import { PriceInputDto, ProxyOrderPurchaseInputDto } from './order.dto';
@@ -22,12 +21,137 @@ import { ProxyOrderModel } from './order.model';
 @Injectable()
 export class ProxyOrderService {
   private readonly apiBaseUrl = 'https://api.proxy-cheap.com/v2/order';
+  private readonly axiosInstance: AxiosInstance;
 
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly paymentPointService: PaymentpointService,
     private readonly walletService: WalletService,
-  ) {}
+  ) {
+    // Validate required environment variables
+    if (!process.env.PROXY_API_KEY || !process.env.PROXY_API_SECRET) {
+      console.warn(
+        '⚠️  [PROXY API] Missing API credentials in environment variables',
+      );
+    }
+
+    // Create axios instance with timeout and retry configuration
+    const timeout = parseInt(process.env.PROXY_API_TIMEOUT || '30000', 10);
+    this.axiosInstance = axios.create({
+      timeout,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'SureProxies/1.0',
+        ...(process.env.PROXY_API_KEY && {
+          'X-Api-Key': process.env.PROXY_API_KEY,
+        }),
+        ...(process.env.PROXY_API_SECRET && {
+          'X-Api-Secret': process.env.PROXY_API_SECRET,
+        }),
+      },
+    });
+
+    console.log(`🔧 [PROXY API] Initialized with ${timeout}ms timeout`);
+
+    // Add response interceptor for better error handling
+    this.axiosInstance.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (
+          error &&
+          (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED')
+        ) {
+          console.error('⚠️ [PROXY API] Request timeout:', {
+            url: error.config?.url,
+            method: error.config?.method,
+            timeout: error.config?.timeout,
+          });
+        }
+        // Ensure rejection reason is an Error
+        return Promise.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      },
+    );
+  }
+
+  /** Retry logic with exponential backoff */
+  private async retryRequest<T>(
+    requestFn: () => Promise<T>,
+    maxRetries = 3,
+    baseDelay = 1000,
+  ): Promise<T> {
+    let lastError: any;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🔄 [PROXY API] Attempt ${attempt}/${maxRetries}`);
+        return await requestFn();
+      } catch (error) {
+        lastError = error;
+
+        const errAny: any = error;
+        const msg = errAny?.message ? String(errAny.message) : '';
+        const isTimeoutError =
+          errAny?.code === 'ETIMEDOUT' ||
+          errAny?.code === 'ECONNABORTED' ||
+          msg.toLowerCase().includes('timeout');
+
+        const isNetworkError =
+          errAny?.code === 'ECONNREFUSED' ||
+          errAny?.code === 'ENOTFOUND' ||
+          errAny?.code === 'ENETUNREACH';
+
+        // Only retry on timeout and network errors
+        if ((isTimeoutError || isNetworkError) && attempt < maxRetries) {
+          const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          console.warn(
+            `⏳ [PROXY API] Attempt ${attempt} failed, retrying in ${delay}ms:`,
+            {
+              error: error.message,
+              code: error.code,
+            },
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+
+        // Don't retry on other errors (4xx, 5xx, etc.)
+        break;
+      }
+    }
+
+    throw lastError;
+  }
+
+  /** Health check for Proxy API connectivity */
+  async healthCheck(): Promise<{
+    status: 'healthy' | 'unhealthy';
+    latency?: number;
+    error?: string;
+  }> {
+    const start = Date.now();
+    try {
+      await this.retryRequest(
+        () => this.axiosInstance.get(this.apiBaseUrl, { timeout: 5000 }),
+        1, // Only 1 attempt for health check
+      );
+      const latency = Date.now() - start;
+      console.log(`✅ [PROXY API] Health check passed in ${latency}ms`);
+      return { status: 'healthy', latency };
+    } catch (error) {
+      const latency = Date.now() - start;
+      console.error(
+        `❌ [PROXY API] Health check failed in ${latency}ms:`,
+        error?.message,
+      );
+      return {
+        status: 'unhealthy',
+        latency,
+        error: error?.message || 'Connection failed',
+      };
+    }
+  }
 
   /** Fetch pricing config from Firestore */
   private async getPricingConfig() {
@@ -47,52 +171,65 @@ export class ProxyOrderService {
   }
 
   /** Fetch current USD to NGN exchange rate from Firestore or external API */
-  private async getExchangeRate(): Promise<number> {
-    try {
-      // Try to get from Firestore cache first
-      const rateDoc = await db.collection('config').doc('exchange_rate').get();
+  async getExchangeRate(): Promise<number> {
+    // Check if cached rate exists and is less than 1 hour old
+    const cacheRef = db.collection('config').doc('exchange-rate');
+    const cacheSnap = await cacheRef.get();
 
-      if (rateDoc.exists) {
-        const data = rateDoc.data();
-        const cachedRate = data?.rate;
-        const lastUpdated = data?.lastUpdated?.toDate();
+    if (cacheSnap.exists) {
+      const data = cacheSnap.data();
+      if (data?.lastUpdated && data?.rate) {
+        let lastUpdated: Date | null = null;
+        if (data.lastUpdated instanceof Date) {
+          lastUpdated = data.lastUpdated;
+        } else if (
+          data.lastUpdated &&
+          typeof data.lastUpdated.toDate === 'function'
+        ) {
+          try {
+            lastUpdated = (data.lastUpdated as { toDate(): Date }).toDate();
+          } catch (e) {
+            console.warn('Failed to convert timestamp to date:', e);
+          }
+        }
 
-        // Use cached rate if less than 1 hour old
-        if (cachedRate && lastUpdated) {
-          const hoursSinceUpdate =
+        if (lastUpdated && lastUpdated instanceof Date) {
+          const hoursOld =
             (Date.now() - lastUpdated.getTime()) / (1000 * 60 * 60);
-          if (hoursSinceUpdate < 1) {
-            console.log('💱 [EXCHANGE RATE] Using cached rate:', cachedRate);
+          if (hoursOld < 1) {
+            const cachedRate = data.rate as number;
             return cachedRate;
           }
         }
       }
+    }
 
-      // Fetch fresh rate from external API
-      console.log('💱 [EXCHANGE RATE] Fetching fresh rate from API...');
-      const response = await axios.get(
-        'https://api.exchangerate-api.com/v4/latest/USD',
+    // Fetch new rate from external API with retry logic
+    try {
+      const response = await this.retryRequest(() =>
+        axios.get('https://api.exchangerate-api.com/v4/latest/USD', {
+          timeout: 10000, // 10 seconds timeout for exchange rate API
+        }),
       );
-      const rate = response.data?.rates?.NGN;
 
-      if (!rate || typeof rate !== 'number') {
-        console.warn(
-          '⚠️  [EXCHANGE RATE] Invalid rate from API, using fallback',
-        );
-        return 1500; // Fallback rate
+      const rate = response.data?.rates?.NGN as number;
+
+      if (!rate) {
+        throw new Error('Exchange rate not available');
       }
 
       // Cache the rate
-      await db.collection('config').doc('exchange_rate').set({
+      await cacheRef.set({
         rate,
         lastUpdated: new Date(),
       });
 
-      console.log('✅ [EXCHANGE RATE] Fresh rate fetched and cached:', rate);
+      console.log('✅ [EXCHANGE RATE] Successfully fetched and cached:', rate);
       return rate;
     } catch (error) {
-      console.error('❌ [EXCHANGE RATE] Error fetching rate:', error);
-      return 1500; // Fallback rate
+      console.error('❌ [EXCHANGE RATE] Failed to fetch after retries:', error);
+      // Return fallback rate (you should set this to a reasonable default)
+      return 1600; // Fallback USD to NGN rate
     }
   }
 
@@ -113,10 +250,6 @@ export class ProxyOrderService {
    */
   private async ensureVirtualAccount(userId: string): Promise<void> {
     try {
-      console.log(
-        '🏦 [VIRTUAL ACCOUNT] Checking if user has virtual account...',
-      );
-
       const virtualAccountRef = db.collection('virtual_accounts').doc(userId);
       const virtualAccountSnap = await virtualAccountRef.get();
 
@@ -140,13 +273,17 @@ export class ProxyOrderService {
       // Create virtual account via PaymentPoint API
       const virtualAccount =
         await this.paymentPointService.createVirtualAccount({
-          email: userData.email,
-          name: userData.fullName,
-          phoneNumber: userData.phoneNumber,
+          email: userData?.email,
+          name: userData?.fullName,
+          phoneNumber: userData?.phoneNumber,
         });
 
       // Save to database
-      await virtualAccountRef.set(virtualAccount as any);
+      await virtualAccountRef.set({
+        ...(virtualAccount || {}),
+        userId,
+        createdAt: new Date(),
+      });
 
       console.log(
         '✅ [VIRTUAL ACCOUNT] Virtual account created successfully for user:',
@@ -191,13 +328,31 @@ export class ProxyOrderService {
   /** Fetch all proxy services */
   async getAvailableProxiesServices(): Promise<ProxyOrderModel[]> {
     try {
-      const response = await axios.get(this.apiBaseUrl);
+      console.log('🔍 [PROXY API] Fetching available proxy services...');
+
+      const response = await this.retryRequest(() =>
+        this.axiosInstance.get(this.apiBaseUrl),
+      );
+
       const services: ProxyOrderModel[] = response?.data?.services;
+
+      if (!services || !Array.isArray(services)) {
+        throw new Error('Invalid response format: services not found');
+      }
+
+      console.log(
+        `✅ [PROXY API] Successfully fetched ${services.length} services`,
+      );
       return services;
     } catch (error) {
-      console.error(error);
+      console.error('❌ [PROXY API] Failed to fetch services:', {
+        message: error.message,
+        code: error.code,
+        status: error.response?.status,
+      });
+
       throw new HttpException(
-        'Failed to fetch proxies',
+        'Unable to fetch proxy services. Please try again later.',
         HttpStatus.BAD_GATEWAY,
       );
     }
@@ -205,17 +360,33 @@ export class ProxyOrderService {
 
   async getServiceOptions(serviceId: string, planId?: string) {
     try {
-      const response = await axios.post<ServiceDetailsResponseModel>(
-        `${this.apiBaseUrl}/${serviceId}`,
-        {
-          planId: planId || null,
-        },
+      console.log(`🔍 [PROXY API] Fetching options for service: ${serviceId}`);
+
+      const response = await this.retryRequest(() =>
+        this.axiosInstance.post<ServiceDetailsResponseModel>(
+          `${this.apiBaseUrl}/${serviceId}`,
+          {
+            planId: planId || null,
+          },
+        ),
+      );
+
+      console.log(
+        `✅ [PROXY API] Successfully fetched options for service: ${serviceId}`,
       );
       return response.data;
     } catch (error) {
-      console.error(error);
+      console.error(
+        `❌ [PROXY API] Failed to fetch options for service ${serviceId}:`,
+        {
+          message: error.message,
+          code: error.code,
+          status: error.response?.status,
+        },
+      );
+
       throw new HttpException(
-        'Failed to fetch service options',
+        'Unable to fetch service options. Please try again later.',
         HttpStatus.BAD_GATEWAY,
       );
     }
@@ -371,9 +542,16 @@ export class ProxyOrderService {
         );
       }
 
-      const response = await axios.post<PriceResponseModel>(
-        `${this.apiBaseUrl}/${serviceId}/price`,
+      console.log(
+        `🔍 [PROXY API] Fetching price for service: ${serviceId}`,
         payload,
+      );
+
+      const response = await this.retryRequest(() =>
+        this.axiosInstance.post<PriceResponseModel>(
+          `${this.apiBaseUrl}/${serviceId}/price`,
+          payload,
+        ),
       );
       const base = response?.data;
       // fetch markup config
@@ -412,7 +590,32 @@ export class ProxyOrderService {
         markupAmount,
       } as PriceResponseModel & Record<string, unknown>;
     } catch (error: unknown) {
+      console.error(
+        `❌ [PROXY API] Failed to fetch price for service ${serviceId}:`,
+        {
+          message: (error as any)?.message || 'Unknown error',
+          code: (error as any)?.code,
+          status: (error as any)?.response?.status,
+        },
+      );
+
       if (axios.isAxiosError(error)) {
+        // Handle timeout errors specifically
+        if (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
+          throw new HttpException(
+            'Request timeout. The proxy service is currently unavailable. Please try again later.',
+            HttpStatus.GATEWAY_TIMEOUT,
+          );
+        }
+
+        // Handle network errors
+        if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+          throw new HttpException(
+            'Unable to connect to proxy service. Please try again later.',
+            HttpStatus.BAD_GATEWAY,
+          );
+        }
+
         const status = error.response?.status;
         const providerData = error.response?.data as unknown;
         // Attempt to derive a concise provider-side message
@@ -422,14 +625,12 @@ export class ProxyOrderService {
           detail =
             d?.errors?.[0]?.message || d?.errors?.[0] || d?.message || d?.error;
         }
-        console.error(
-          'Provider price API error:',
-          JSON.stringify(providerData),
-        );
+
         // Additional payload context logged above on build; re-log minimal on failure if debug enabled
         if (process.env.DEBUG_PROXY_ORDER === '1') {
           console.error('[ProxyOrder:getPrice] failed for', serviceId);
         }
+
         throw new HttpException(
           {
             message: 'Failed to fetch price',
@@ -441,8 +642,12 @@ export class ProxyOrderService {
             : HttpStatus.BAD_GATEWAY,
         );
       }
+
       console.error('Unknown error fetching price:', error);
-      throw new HttpException('Failed to fetch price', HttpStatus.BAD_GATEWAY);
+      throw new HttpException(
+        'An unexpected error occurred while fetching price. Please try again later.',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -452,7 +657,7 @@ export class ProxyOrderService {
   ): Promise<{ transactionId: string; amount: number }> {
     try {
       console.log('💰 [PURCHASE] Starting purchase for service:', serviceId);
-      console.log('📋 [PURCHASE] User ID:', model.userId);
+
       console.log(
         '🎯 [PURCHASE] Expected price from frontend:',
         model.expectedPrice,
@@ -478,7 +683,7 @@ export class ProxyOrderService {
       // Store expectedPrice for validation AFTER webhook confirms payment
       if (model.expectedPrice !== undefined && model.expectedPrice !== null) {
         console.log(
-          '� [PURCHASE] Expected price from frontend (NGN):',
+          '💰 [PURCHASE] Expected price from frontend (NGN):',
           model.expectedPrice,
         );
         console.log(
@@ -486,14 +691,20 @@ export class ProxyOrderService {
         );
       }
 
-      const transaction: Transaction = await this.transactionsService.create(
-        model.userId,
-        {
-          type: 'DEPOSIT',
-          amount: profitPrice,
+      let transaction: { id: string; [key: string]: any };
+      try {
+        transaction = await this.transactionsService.create(model.userId, {
+          type: 'PURCHASE', // Proxy purchases are 'PURCHASE' type
+          amount: profitPrice, // Store USD amount (same as deposits)
           reference: crypto.randomUUID(),
-        },
-      );
+        });
+      } catch (error) {
+        console.error('Failed to create transaction:', error);
+        throw new HttpException(
+          'Failed to create transaction',
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
 
       console.log('📝 [PURCHASE] Transaction created:', transaction.id);
 
@@ -511,7 +722,7 @@ export class ProxyOrderService {
         userId: model.userId,
         serviceId,
         ...(model.planId && { planId: model.planId }), // Only include if defined
-        pricePaid: profitPrice,
+        pricePaid: profitPrice, // Store USD amount for proxy API
         ...(model.expectedPrice !== undefined &&
           model.expectedPrice !== null && {
             expectedPrice: model.expectedPrice,
@@ -535,7 +746,10 @@ export class ProxyOrderService {
       );
       console.log('✨ [PURCHASE] Purchase initialization complete');
 
-      return { transactionId: transaction.id, amount: profitPrice };
+      return {
+        transactionId: transaction.id,
+        amount: profitPrice, // Return USD amount (consistent with storage)
+      };
     } catch (error) {
       console.error('❌ [PURCHASE] Purchase error:', error);
       throw new HttpException(
@@ -686,15 +900,19 @@ export class ProxyOrderService {
         JSON.stringify(executePayload, null, 2),
       );
 
-      const executeResponse = await axios.post<Record<string, unknown>>(
-        `${this.apiBaseUrl}/${pending.serviceId}/execute`,
-        executePayload,
-        {
-          headers: {
-            'X-Api-Key': process.env.PROXY_API_KEY as string,
-            'X-Api-Secret': process.env.PROXY_API_SECRET as string,
+      console.log('🚀 [FINALIZE] Executing proxy purchase with provider...');
+
+      const executeResponse = await this.retryRequest(() =>
+        this.axiosInstance.post<Record<string, unknown>>(
+          `${this.apiBaseUrl}/${pending.serviceId}/execute`,
+          executePayload,
+          {
+            headers: {
+              'X-Api-Key': process.env.PROXY_API_KEY as string,
+              'X-Api-Secret': process.env.PROXY_API_SECRET as string,
+            },
           },
-        },
+        ),
       );
 
       // construct and save purchase

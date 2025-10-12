@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import * as admin from 'firebase-admin';
 import { db, dbAuth } from 'src/main';
 import { UserDoc, UserRole } from 'src/modules/user/user.model';
@@ -15,7 +15,10 @@ export class UserService {
       });
 
       if (!record) {
-        throw new Error('User creation failed');
+        throw new HttpException(
+          'Unable to create account. Please try again.',
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
       }
       await this.saveUser(record.uid, {
         uid: record.uid,
@@ -32,7 +35,10 @@ export class UserService {
       const data = userDoc.data() as UserDoc | undefined;
 
       if (!data) {
-        throw new Error('User not found after creation');
+        throw new HttpException(
+          'Account created but verification failed. Please contact support.',
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
       }
 
       return {
@@ -56,10 +62,12 @@ export class UserService {
       const userRef = db.collection('users').doc(userId);
       // ✅ Just save the user - virtual accounts created on first purchase
       await userRef.set(userData);
-      console.log('✅ [USER] User saved successfully:', userId);
     } catch (error) {
       console.error('❌ [USER] Error saving user in db:', error);
-      throw new Error('Error saving user');
+      throw new HttpException(
+        'Unable to save account information. Please try again.',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
     }
   }
 
@@ -85,7 +93,7 @@ export class UserService {
   async findOne(id: string) {
     const user = await db.collection('users').doc(id).get();
     if (!user.exists) {
-      throw new Error('User not found');
+      throw new HttpException('Account not found', HttpStatus.NOT_FOUND);
     }
     return { id: user.id, ...user.data() };
   }

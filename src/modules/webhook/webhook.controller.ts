@@ -35,7 +35,6 @@ export class WebhookController {
     console.log('='.repeat(80) + '\n');
 
     try {
-      // Validate raw body exists
       if (!req.rawBody) {
         console.error(
           '❌ [WEBHOOK CONTROLLER] rawBody is missing from request',
