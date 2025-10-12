@@ -57,14 +57,20 @@ export class ProxyOrderService {
     this.axiosInstance.interceptors.response.use(
       (response) => response,
       (error) => {
-        if (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
+        if (
+          error &&
+          (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED')
+        ) {
           console.error('⚠️ [PROXY API] Request timeout:', {
             url: error.config?.url,
             method: error.config?.method,
             timeout: error.config?.timeout,
           });
         }
-        return Promise.reject(error);
+        // Ensure rejection reason is an Error
+        return Promise.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
       },
     );
   }
@@ -84,15 +90,17 @@ export class ProxyOrderService {
       } catch (error) {
         lastError = error;
 
+        const errAny: any = error;
+        const msg = errAny?.message ? String(errAny.message) : '';
         const isTimeoutError =
-          error.code === 'ETIMEDOUT' ||
-          error.code === 'ECONNABORTED' ||
-          error.message?.includes('timeout');
+          errAny?.code === 'ETIMEDOUT' ||
+          errAny?.code === 'ECONNABORTED' ||
+          msg.toLowerCase().includes('timeout');
 
         const isNetworkError =
-          error.code === 'ECONNREFUSED' ||
-          error.code === 'ENOTFOUND' ||
-          error.code === 'ENETUNREACH';
+          errAny?.code === 'ECONNREFUSED' ||
+          errAny?.code === 'ENOTFOUND' ||
+          errAny?.code === 'ENETUNREACH';
 
         // Only retry on timeout and network errors
         if ((isTimeoutError || isNetworkError) && attempt < maxRetries) {
