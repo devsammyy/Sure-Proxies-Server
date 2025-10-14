@@ -1,7 +1,7 @@
 export interface Wallet {
   id: string;
   userId: string;
-  balance: number; // in USD
+  balance: number; // in NGN (Naira)
   createdAt: Date;
   updatedAt: Date;
 }
@@ -11,7 +11,7 @@ export interface WalletTransaction {
   walletId: string;
   userId: string;
   type: 'DEPOSIT' | 'WITHDRAWAL' | 'PURCHASE' | 'REFUND';
-  amount: number; // in USD
+  amount: number; // in NGN
   status: 'PENDING' | 'SUCCESS' | 'FAILED';
   description: string;
   referenceId?: string; // transaction ID or payment reference
@@ -20,11 +20,11 @@ export interface WalletTransaction {
 }
 
 export interface DepositRequest {
-  amount: number; // in USD
+  amount: number; // in NGN
 }
 
 export interface WithdrawalRequest {
-  amount: number; // in USD
+  amount: number; // in NGN
   bankAccountNumber: string;
   bankName: string;
   accountName: string;

@@ -1,5 +1,11 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Inject,
+  Injectable,
+  forwardRef,
+} from '@nestjs/common';
 import { db } from 'src/main';
+import { ProxyOrderService } from '../proxy/order/order.service';
 import { TransactionsService } from '../transaction/transaction.service';
 import { Wallet, WalletTransaction, WithdrawalRequest } from './wallet.model';
 
@@ -8,7 +14,11 @@ export class WalletService {
   private walletCollection = 'wallets';
   private walletTransactionCollection = 'wallet_transactions';
 
-  constructor(private transactionsService: TransactionsService) {}
+  constructor(
+    private transactionsService: TransactionsService,
+    @Inject(forwardRef(() => ProxyOrderService))
+    private proxyOrderService: ProxyOrderService,
+  ) {}
 
   async getOrCreateWallet(userId: string): Promise<Wallet> {
     const walletSnapshot = await db
@@ -43,33 +53,39 @@ export class WalletService {
 
   async initiateDeposit(
     userId: string,
-    amount: number,
+    amountNaira: number,
   ): Promise<{ transactionId: string; message: string }> {
-    if (amount <= 0) {
+    if (amountNaira <= 0) {
       throw new BadRequestException('Amount must be greater than 0');
     }
 
-    // Create a transaction record for the deposit
+    // Ensure user has a virtual account (create if not exists)
+    await this.proxyOrderService.ensureVirtualAccount(userId);
+
+    // Wallet operates in NGN. Store deposit amounts in NGN.
+    const amountNGN = Math.round(amountNaira);
+
+    // Create a transaction record for the deposit (store amount in NGN so transaction reflects user currency)
     const transaction = await this.transactionsService.create(userId, {
       type: 'DEPOSIT',
-      amount,
+      amount: amountNGN,
       reference: `DEPOSIT-${Date.now()}`,
     });
 
-    // Create wallet transaction record
+    // Create wallet transaction record (NGN)
     await this.createWalletTransaction({
       userId,
       type: 'DEPOSIT',
-      amount,
+      amount: amountNGN,
       status: 'PENDING',
-      description: `Wallet deposit of $${amount}`, // Amount is in USD for wallet storage
+      description: `Wallet deposit of ₦${amountNGN}`,
       referenceId: transaction.id,
     });
 
     return {
       transactionId: transaction.id,
       message:
-        'Deposit initiated. Transfer the amount to your virtual account to complete the deposit.',
+        'Deposit initiated. Transfer the amount (in Naira) to your virtual account to complete the deposit.',
     };
   }
 
@@ -93,6 +109,7 @@ export class WalletService {
       }
 
       const currentWallet = walletDoc.data() as Wallet;
+      // processDeposit receives amount in NGN (webhook supplies amountPaid in NGN)
       const newBalance = currentWallet.balance + amount;
 
       // Update wallet balance atomically
@@ -131,7 +148,7 @@ export class WalletService {
           type: 'DEPOSIT' as const,
           amount,
           status: 'SUCCESS' as const,
-          description: `Wallet deposit of $${amount}`,
+          description: `Wallet deposit of ₦${amount}`,
           referenceId: transactionId,
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -154,11 +171,13 @@ export class WalletService {
 
     const wallet = await this.getOrCreateWallet(userId);
 
+    // Wallet balance is in NGN
     if (wallet.balance < request.amount) {
       throw new BadRequestException('Insufficient balance');
     }
 
     // Step 1: Create transaction record first
+    // Create transaction record in NGN
     const transaction = await this.transactionsService.create(userId, {
       type: 'WITHDRAWAL',
       amount: request.amount,
@@ -182,7 +201,7 @@ export class WalletService {
 
         const currentWallet = walletDoc.data() as Wallet;
 
-        // Double-check balance inside transaction
+        // Double-check balance inside transaction (NGN)
         if (currentWallet.balance < request.amount) {
           throw new BadRequestException('Insufficient balance');
         }
@@ -202,7 +221,7 @@ export class WalletService {
         type: 'WITHDRAWAL',
         amount: request.amount,
         status: 'PENDING',
-        description: `Withdrawal of $${request.amount} to ${request.bankName} - ${request.accountName}`,
+        description: `Withdrawal of ₦${request.amount} to ${request.bankName} - ${request.accountName}`,
         referenceId: transaction.id,
       });
 
@@ -212,7 +231,7 @@ export class WalletService {
 
       return {
         transactionId: transaction.id,
-        message: `Withdrawal request for $${request.amount} submitted successfully. Funds will be sent to ${request.bankName} - ${request.accountName}`,
+        message: `Withdrawal request for ₦${request.amount} submitted successfully. Funds will be sent to ${request.bankName} - ${request.accountName}`,
       };
     } catch (error) {
       // If wallet deduction fails, mark transaction as FAILED
@@ -230,6 +249,7 @@ export class WalletService {
   ): Promise<string> {
     const wallet = await this.getOrCreateWallet(userId);
 
+    // Wallet balance and amount are in NGN
     if (wallet.balance < amount) {
       throw new BadRequestException(
         'Insufficient wallet balance for this purchase',
@@ -237,8 +257,9 @@ export class WalletService {
     }
 
     // Step 1: Create transaction record first
+    // Create a transaction record indicating a purchase (store NGN amount)
     const transaction = await this.transactionsService.create(userId, {
-      type: 'DEPOSIT', // Using DEPOSIT type for consistency with proxy purchases
+      type: 'PURCHASE',
       amount,
       reference: `WALLET-PURCHASE-${Date.now()}`,
     });
@@ -283,12 +304,12 @@ export class WalletService {
         type: 'PURCHASE',
         amount,
         status: 'SUCCESS',
-        description: description || `Purchase deduction of $${amount}`,
+        description: description || `Purchase deduction of ₦${amount}`,
         referenceId: transaction.id,
       });
 
       console.log(
-        `✅ [WALLET] Purchase deducted: $${amount} from wallet ${wallet.id}`,
+        `✅ [WALLET] Purchase deducted: ₦${amount} from wallet ${wallet.id}`,
       );
 
       return transaction.id;
