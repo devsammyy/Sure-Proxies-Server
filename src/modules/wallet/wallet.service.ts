@@ -226,7 +226,7 @@ export class WalletService {
       });
 
       console.log(
-        `✅ [WALLET] Withdrawal processed: $${request.amount} deducted from wallet ${wallet.id}`,
+        `✅ [WALLET] Withdrawal processed: ₦${request.amount} deducted from wallet ${wallet.id}`,
       );
 
       return {
@@ -402,7 +402,7 @@ export class WalletService {
         type: 'REFUND',
         amount,
         status: 'SUCCESS',
-        description: description || `Refund of $${amount}`,
+        description: description || `Refund of ₦${amount}`,
         referenceId: transaction.id,
       });
 
