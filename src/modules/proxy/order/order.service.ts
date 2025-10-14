@@ -248,7 +248,7 @@ export class ProxyOrderService {
    * Ensure user has virtual account (create if not exists)
    * This implements lazy creation - only creates on first purchase
    */
-  private async ensureVirtualAccount(userId: string): Promise<void> {
+  async ensureVirtualAccount(userId: string): Promise<void> {
     try {
       const virtualAccountRef = db.collection('virtual_accounts').doc(userId);
       const virtualAccountSnap = await virtualAccountRef.get();
@@ -259,7 +259,8 @@ export class ProxyOrderService {
       }
 
       console.log(
-        '📝 [VIRTUAL ACCOUNT] No virtual account found, creating one...',
+        '📝 [VIRTUAL ACCOUNT] No virtual account found, creating one for user:',
+        userId,
       );
 
       // Get user details
@@ -267,28 +268,51 @@ export class ProxyOrderService {
       const userData = userSnap.data();
 
       if (!userData) {
+        console.error(
+          '[VIRTUAL ACCOUNT] User not found in Firestore for userId:',
+          userId,
+        );
         throw new HttpException('User not found', HttpStatus.NOT_FOUND);
       }
 
+      console.log('[VIRTUAL ACCOUNT] User data:', userData);
+
       // Create virtual account via PaymentPoint API
-      const virtualAccount =
-        await this.paymentPointService.createVirtualAccount({
+      let virtualAccount;
+      try {
+        virtualAccount = await this.paymentPointService.createVirtualAccount({
           email: userData?.email,
           name: userData?.fullName,
           phoneNumber: userData?.phoneNumber,
         });
+        console.log(
+          '[VIRTUAL ACCOUNT] PaymentPoint API response:',
+          virtualAccount,
+        );
+      } catch (apiError) {
+        console.error('[VIRTUAL ACCOUNT] PaymentPoint API error:', apiError);
+        throw apiError;
+      }
 
       // Save to database
-      await virtualAccountRef.set({
-        ...(virtualAccount || {}),
-        userId,
-        createdAt: new Date(),
-      });
-
-      console.log(
-        '✅ [VIRTUAL ACCOUNT] Virtual account created successfully for user:',
-        userId,
-      );
+      try {
+        const toSave: Record<string, unknown> = Object.assign(
+          {},
+          virtualAccount || ({} as Record<string, unknown>),
+          { userId, createdAt: new Date() },
+        );
+        await virtualAccountRef.set(toSave);
+        console.log(
+          '✅ [VIRTUAL ACCOUNT] Virtual account created and saved for user:',
+          userId,
+        );
+      } catch (dbError) {
+        console.error(
+          '[VIRTUAL ACCOUNT] Error saving virtual account to Firestore:',
+          dbError,
+        );
+        throw dbError;
+      }
     } catch (error) {
       console.error(
         '❌ [VIRTUAL ACCOUNT] Error ensuring virtual account:',
@@ -691,22 +715,52 @@ export class ProxyOrderService {
         );
       }
 
-      let transaction: { id: string; [key: string]: any };
-      try {
-        transaction = await this.transactionsService.create(model.userId, {
-          type: 'PURCHASE', // Proxy purchases are 'PURCHASE' type
-          amount: profitPrice, // Store USD amount (same as deposits)
-          reference: crypto.randomUUID(),
-        });
-      } catch (error) {
-        console.error('Failed to create transaction:', error);
-        throw new HttpException(
-          'Failed to create transaction',
-          HttpStatus.INTERNAL_SERVER_ERROR,
-        );
-      }
+      let transaction: { id: string; [key: string]: any } | null = null;
 
-      console.log('📝 [PURCHASE] Transaction created:', transaction.id);
+      // If paymentMethod is wallet, deduct NGN from user's wallet first
+      if ((model as any).paymentMethod === 'wallet') {
+        try {
+          const exchangeRate = await this.getExchangeRate();
+          const priceInNaira = Math.round(profitPrice * exchangeRate);
+          console.log(
+            '[PURCHASE] Wallet payment selected. Price in NGN:',
+            priceInNaira,
+          );
+
+          // Deduct from wallet (wallet operates in NGN)
+          const txId = await this.walletService.deductForPurchase(
+            model.userId,
+            priceInNaira,
+            `Purchase for service ${serviceId}`,
+          );
+
+          // Use the wallet-created transaction as the transaction for the purchase
+          transaction = { id: txId } as any;
+          console.log('📝 [PURCHASE] Wallet deduction transaction:', txId);
+        } catch (err) {
+          console.error('❌ [PURCHASE] Wallet deduction failed:', err);
+          throw new HttpException(
+            'Wallet payment failed: ' + (err?.message || String(err)),
+            HttpStatus.PAYMENT_REQUIRED,
+          );
+        }
+      } else {
+        try {
+          transaction = await this.transactionsService.create(model.userId, {
+            type: 'PURCHASE', // Proxy purchases are 'PURCHASE' type
+            amount: profitPrice, // Store USD amount (for provider tracking)
+            reference: crypto.randomUUID(),
+          });
+        } catch (error) {
+          console.error('Failed to create transaction:', error);
+          throw new HttpException(
+            'Failed to create transaction',
+            HttpStatus.INTERNAL_SERVER_ERROR,
+          );
+        }
+
+        console.log('📝 [PURCHASE] Transaction created:', transaction.id);
+      }
 
       // Save pending purchase with all order details
       // Note: Filter out undefined values to avoid Firestore errors
@@ -735,6 +789,16 @@ export class ProxyOrderService {
         JSON.stringify(pendingData, null, 2),
       );
 
+      if (!transaction || !transaction.id) {
+        console.error(
+          '❌ [PURCHASE] Transaction missing when saving pending purchase',
+        );
+        throw new HttpException(
+          'Transaction missing',
+          HttpStatus.INTERNAL_SERVER_ERROR,
+        );
+      }
+
       await db
         .collection('pending_purchases')
         .doc(transaction.id)
@@ -745,6 +809,44 @@ export class ProxyOrderService {
         transaction.id,
       );
       console.log('✨ [PURCHASE] Purchase initialization complete');
+
+      // If payment was from wallet, finalize immediately (we already deducted NGN)
+      if ((model as any).paymentMethod === 'wallet') {
+        try {
+          console.log(
+            '🚀 [PURCHASE] Finalizing purchase immediately for wallet payment:',
+            transaction.id,
+          );
+          // Call finalizePurchase to execute provider order
+          const purchase = await this.finalizePurchase(transaction.id);
+          console.log(
+            '✅ [PURCHASE] Finalization result for wallet payment:',
+            purchase?.id || null,
+          );
+        } catch (err) {
+          console.error(
+            '❌ [PURCHASE] Finalize failed for wallet payment:',
+            err,
+          );
+          // Attempt to refund to wallet (best-effort)
+          try {
+            console.log(
+              '♻️ [PURCHASE] Refunding user due to finalize failure:',
+              model.userId,
+            );
+            await this.walletService.refundToWallet(
+              model.userId,
+              Math.round(profitPrice * (await this.getExchangeRate())),
+              'Refund due to purchase finalization failure',
+            );
+          } catch (refundErr) {
+            console.error(
+              '❌ [PURCHASE] Refund failed after finalize error:',
+              refundErr,
+            );
+          }
+        }
+      }
 
       return {
         transactionId: transaction.id,

@@ -27,15 +27,20 @@ export class PaymentpointService {
       businessId: this.paymentPointBusinessId,
     };
 
+    console.log('[PaymentPoint] Creating virtual account with body:', body);
+
     try {
       const response = await this.apiClient.postPaymentPoint(
         '/createVirtualAccount',
         body,
       );
-
+      console.log(
+        '[PaymentPoint] createVirtualAccount API response:',
+        response,
+      );
       return response;
     } catch (error) {
-      console.error('Error creating virtual account');
+      console.error('[PaymentPoint] Error creating virtual account:', error);
       throw error;
     }
   }
