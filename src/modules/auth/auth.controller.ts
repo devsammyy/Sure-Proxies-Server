@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { env } from 'src/config';
 import { LoginDto } from 'src/modules/auth/auth.dto';
 import { AuthService } from 'src/modules/auth/auth.service';
 
@@ -40,7 +41,7 @@ export class AuthController {
         httpOnly: true,
         sameSite: 'lax',
         maxAge: twelveHoursMs,
-        secure: process.env.NODE_ENV === 'production',
+        secure: env.NODE_ENV === 'production',
         path: '/',
       });
     } catch {
@@ -58,7 +59,7 @@ export class AuthController {
         httpOnly: true,
         sameSite: 'lax',
         maxAge: 0,
-        secure: process.env.NODE_ENV === 'production',
+        secure: env.NODE_ENV === 'production',
         path: '/',
       });
     } catch {

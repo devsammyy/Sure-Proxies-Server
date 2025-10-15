@@ -4,8 +4,9 @@ import * as firebaseAdmin from 'firebase-admin';
 import { AllExceptionsFilter } from 'src/common/filters/all-exception-filter';
 import { setupSwagger } from 'src/swagger';
 import { AppModule } from './app.module';
+import { env, isDev, parseOrigins, rawEnv } from './config';
 
-const filePath = process.env.SERVICE_ACCOUNT_PATH || './serviceAccount.json';
+const filePath = env.SERVICE_ACCOUNT_PATH;
 // const filePath =
 //   process.env.SERVICE_ACCOUNT_PATH || '/etc/secrets/serviceAccount.json';
 
@@ -37,24 +38,19 @@ async function bootstrap() {
       .replace(/^['"]|['"]$/g, '') // strip wrapping quotes if present
       .replace(/\/$/, ''); // strip trailing slash
 
-  const extraOrigins = (process.env.CORS_ORIGINS || '')
-    .split(',')
-    .map(sanitize)
-    .filter(Boolean);
+  const extraOrigins = parseOrigins(env.CORS_ORIGINS || '').map(sanitize);
 
   const allowList = [
     'http://localhost:3000',
     'https://sure-proxies.vercel.app',
     'http://127.0.0.1:3000',
-    sanitize(process.env.FRONTEND_URL), // primary frontend
+    sanitize(env.FRONTEND_URL), // primary frontend
     ...extraOrigins,
   ]
     .filter(Boolean)
     .filter((v, i, arr) => arr.indexOf(v) === i); // dedupe
 
-  const baseDomain = sanitize(process.env.FRONTEND_BASE_DOMAIN); // e.g. myapp.com
-
-  const isDev = process.env.NODE_ENV !== 'production';
+  const baseDomain = sanitize(env.FRONTEND_BASE_DOMAIN); // e.g. myapp.com
   if (isDev) {
     console.log('[CORS] Allow list:', allowList);
     if (baseDomain) console.log('[CORS] Base domain wildcard:', baseDomain);
@@ -79,7 +75,7 @@ async function bootstrap() {
         callback(null, true);
         return;
       }
-      if (isDev && process.env.CORS_FALLBACK_ALLOW_ALL === '1') {
+      if (isDev && rawEnv.CORS_FALLBACK_ALLOW_ALL === '1') {
         console.warn(
           '[CORS] Fallback allowing origin (dev override):',
           cleaned,
@@ -98,7 +94,7 @@ async function bootstrap() {
   });
   setupSwagger(app);
   app.useGlobalFilters(new AllExceptionsFilter());
-  await app.listen(process.env.PORT ?? 3002);
+  await app.listen(env.PORT ?? 3002);
 }
 bootstrap().catch((err) => {
   console.error('Failed to start application:', err);

@@ -1,10 +1,11 @@
 import axios from 'axios';
+import { env, rawEnv } from '../../config';
 
 export class ApiClient {
-  apiKey = process.env.PROXY_CHEAP_API_KEY;
-  apiSecretKey = process.env.PROXY_CHEAP_API_SECRET;
-  paymentPointSecretKey = process.env.PAYMENTPOINT_SECRET;
-  paymentPointApiKey = process.env.PAYMENTPOINT_APIKEY;
+  apiKey = env.SERVICE_ACCOUNT_PATH; // fallback placeholder if not set
+  apiSecretKey = rawEnv.PROXY_CHEAP_API_SECRET || '';
+  paymentPointSecretKey = rawEnv.PAYMENTPOINT_SECRET || '';
+  paymentPointApiKey = rawEnv.PAYMENTPOINT_APIKEY || '';
 
   constructor(private readonly baseUrl: string) {}
 
