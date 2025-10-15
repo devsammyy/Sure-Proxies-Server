@@ -6,6 +6,40 @@ import { CreateUserDTO } from './user.dto';
 
 @Injectable()
 export class UserService {
+  // Safely format various timestamp/values returned from Firestore into ISO strings
+  private formatValue(val: unknown): string | null {
+    if (val == null) return null;
+
+    // Some Firestore SDKs return objects with a toDate() method (duck-typing)
+    if (typeof val === 'object' && val !== null) {
+      // Detect Firestore-like timestamp objects that expose `seconds` or `_seconds`
+      const asObj = val as Record<string, unknown>;
+      const seconds =
+        typeof asObj.seconds === 'number'
+          ? asObj.seconds
+          : typeof asObj._seconds === 'number'
+            ? asObj._seconds
+            : undefined;
+      if (typeof seconds === 'number') {
+        try {
+          return new Date(seconds * 1000).toISOString();
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (typeof val === 'string') return val;
+    if (typeof val === 'number') return new Date(val).toISOString();
+
+    try {
+      const s = JSON.stringify(val);
+      return s === undefined ? null : s;
+    } catch {
+      return null;
+    }
+  }
+
   public async create(model: CreateUserDTO): Promise<UserDoc> {
     try {
       const record = await dbAuth.createUser({
@@ -73,26 +107,6 @@ export class UserService {
 
   public async findAll(): Promise<UserDoc[]> {
     const usersSnapshot = await db.collection('users').get();
-    // Simple formatter: attempt to call .toDate() if available, otherwise stringify
-    const fmt = (val: unknown): string | null => {
-      if (!val) return null;
-      // If it's a Firestore Timestamp, convert safely
-      if (val instanceof admin.firestore.Timestamp) {
-        try {
-          return val.toDate().toISOString();
-        } catch (e) {
-          void e;
-        }
-      }
-      if (typeof val === 'string') return val;
-      if (typeof val === 'number') return new Date(val).toISOString();
-      try {
-        return JSON.stringify(val);
-      } catch {
-        return String(val);
-      }
-    };
-
     return usersSnapshot.docs.map((doc) => {
       const data = doc.data() as Record<string, unknown> | undefined;
 
@@ -104,8 +118,8 @@ export class UserService {
           data && typeof data.fullName === 'string' ? data.fullName : '',
         phoneNumber:
           data && typeof data.phoneNumber === 'string' ? data.phoneNumber : '',
-        createdAt: fmt(data ? data['createdAt'] : undefined),
-        lastLogin: fmt(data ? data['lastLogin'] : undefined),
+        createdAt: this.formatValue(data ? data['createdAt'] : undefined),
+        lastLogin: this.formatValue(data ? data['lastLogin'] : undefined),
         purchases:
           data && Array.isArray(data['purchases'])
             ? (data['purchases'] as unknown[])
@@ -147,29 +161,6 @@ export class UserService {
       const total = filtered.length;
       const start = (page - 1) * limit;
       const pageDocs = filtered.slice(start, start + limit);
-      const fmt = (val: unknown): string | null => {
-        if (!val) return null;
-        try {
-          const maybeTs = val as any;
-          if (maybeTs && typeof maybeTs.toDate === 'function') {
-            try {
-              return maybeTs.toDate().toISOString();
-            } catch (e) {
-              void e;
-            }
-          }
-        } catch (e) {
-          void e;
-        }
-        if (typeof val === 'string') return val;
-        if (typeof val === 'number') return new Date(val).toISOString();
-        try {
-          return JSON.stringify(val);
-        } catch {
-          return String(val);
-        }
-      };
-
       const data = pageDocs.map((d) => {
         const data = d.data as Record<string, unknown> | undefined;
         return {
@@ -182,8 +173,8 @@ export class UserService {
             data && typeof data.phoneNumber === 'string'
               ? data.phoneNumber
               : '',
-          createdAt: fmt(data ? data['createdAt'] : undefined),
-          lastLogin: fmt(data ? data['lastLogin'] : undefined),
+          createdAt: this.formatValue(data ? data['createdAt'] : undefined),
+          lastLogin: this.formatValue(data ? data['lastLogin'] : undefined),
           purchases:
             data && Array.isArray(data['purchases'])
               ? (data['purchases'] as unknown[])
@@ -202,24 +193,6 @@ export class UserService {
 
     const snapshot = await query.offset(offset).limit(limit).get();
 
-    const fmt = (val: unknown): string | null => {
-      if (!val) return null;
-      if (val instanceof admin.firestore.Timestamp) {
-        try {
-          return val.toDate().toISOString();
-        } catch (e) {
-          void e;
-        }
-      }
-      if (typeof val === 'string') return val;
-      if (typeof val === 'number') return new Date(val).toISOString();
-      try {
-        return JSON.stringify(val);
-      } catch {
-        return String(val);
-      }
-    };
-
     const data = snapshot.docs.map((doc) => {
       const data = doc.data() as Record<string, unknown> | undefined;
       return {
@@ -230,8 +203,8 @@ export class UserService {
           data && typeof data.fullName === 'string' ? data.fullName : '',
         phoneNumber:
           data && typeof data.phoneNumber === 'string' ? data.phoneNumber : '',
-        createdAt: fmt(data ? data['createdAt'] : undefined),
-        lastLogin: fmt(data ? data['lastLogin'] : undefined),
+        createdAt: this.formatValue(data ? data['createdAt'] : undefined),
+        lastLogin: this.formatValue(data ? data['lastLogin'] : undefined),
         purchases:
           data && Array.isArray(data['purchases'])
             ? (data['purchases'] as unknown[])
@@ -250,24 +223,6 @@ export class UserService {
     }
     const data = user.data() as Record<string, unknown> | undefined;
 
-    const fmt = (val: unknown): string | null => {
-      if (!val) return null;
-      try {
-        // @ts-ignore
-        if (typeof val?.toDate === 'function') {
-          // @ts-ignore
-          return val.toDate().toISOString();
-        }
-      } catch (_) {}
-      if (typeof val === 'string') return val;
-      if (typeof val === 'number') return new Date(val).toISOString();
-      try {
-        return JSON.stringify(val);
-      } catch {
-        return String(val);
-      }
-    };
-
     return {
       id: user.id,
       uid: data && typeof data.uid === 'string' ? data.uid : user.id,
@@ -275,8 +230,8 @@ export class UserService {
       fullName: data && typeof data.fullName === 'string' ? data.fullName : '',
       phoneNumber:
         data && typeof data.phoneNumber === 'string' ? data.phoneNumber : '',
-      createdAt: fmt(data ? data['createdAt'] : undefined),
-      lastLogin: fmt(data ? data['lastLogin'] : undefined),
+      createdAt: this.formatValue(data ? data['createdAt'] : undefined),
+      lastLogin: this.formatValue(data ? data['lastLogin'] : undefined),
       purchases:
         data && Array.isArray(data['purchases'])
           ? (data['purchases'] as unknown[])

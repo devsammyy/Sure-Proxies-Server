@@ -10,7 +10,7 @@ import { Request } from 'express';
 import { ApAuthGuard } from 'src/modules/auth/auth-guard.decorator';
 import { UserRole } from 'src/modules/user/user.model';
 
-import { PriceInputDto, PurchaseOrderInputDto } from './order.dto';
+import { PriceInputDto, ProxyOrderPurchaseInputDto } from './order.dto';
 import { ProxyOrderModel, PurchaseOrderModel } from './order.model';
 import { ProxyOrderService } from './order.service';
 
@@ -87,13 +87,18 @@ export class ProxyOrderController {
   @Post(':serviceId/purchase')
   @ApiBody({
     description: 'Enter the options',
-    type: PurchaseOrderInputDto,
+    // Use the proxy purchase DTO which supports packageId / traffic-only variants
+    type: ProxyOrderPurchaseInputDto,
   })
   purchase(
     @Param('serviceId') serviceId: string,
-    @Body('model') model: PurchaseOrderInputDto,
+    @Body('model') model: ProxyOrderPurchaseInputDto,
   ) {
-    return this.proxyOrderService.purchaseProxy(serviceId, model);
+    // Cast via unknown to avoid unsafe-any lint warnings while preserving the explicit DTO type
+    return this.proxyOrderService.purchaseProxy(
+      serviceId,
+      model as unknown as ProxyOrderPurchaseInputDto,
+    );
   }
 
   @Post('finalize/:transactionId')
