@@ -8,7 +8,7 @@ import { WalletService } from 'src/modules/wallet/wallet.service';
 
 export type WebhookPayload = {
   transaction_id?: string;
-  amount_paid?: number;
+  amount_paid?: number | string;
   transaction_status?: string;
   settlement_amount?: number;
   settlement_fee?: number;
@@ -98,13 +98,107 @@ export class WebhookService {
     payload: WebhookPayload,
   ): Promise<FirebaseFirestore.DocumentSnapshot | null> {
     console.log('🔍 [WEBHOOK SERVICE] Finding transaction...');
-    const { transaction_id, customer, amount_paid } = payload;
+    const transaction_id =
+      typeof payload.transaction_id === 'string'
+        ? payload.transaction_id
+        : undefined;
+
+    const customer =
+      payload.customer && typeof payload.customer === 'object'
+        ? (payload.customer as { customer_id?: string })
+        : undefined;
+
+    const amount_paid =
+      typeof payload.amount_paid === 'number' ||
+      typeof payload.amount_paid === 'string'
+        ? payload.amount_paid
+        : undefined;
+
+    const receiver =
+      payload.receiver && typeof payload.receiver === 'object'
+        ? (payload.receiver as { account_number?: string })
+        : undefined;
 
     console.log('🔎 [WEBHOOK SERVICE] Search criteria:', {
       transaction_id,
       customer_id: customer?.customer_id,
       amount_paid,
     });
+
+    // Quick deterministic mapping lookup: prefer customer_id mapping, fallback to receiver account mapping
+    try {
+      const custId = customer?.customer_id;
+      if (custId) {
+        const key = String(custId).trim();
+        console.log(
+          '🔎 [WEBHOOK SERVICE] Checking virtual_account_mappings for customer_id',
+          key,
+        );
+        const mapDoc = await db
+          .collection('virtual_account_mappings')
+          .doc(key)
+          .get();
+        if (mapDoc.exists) {
+          const mapData = mapDoc.data() as
+            | { transactionId?: string }
+            | undefined;
+          const mappedTxId = mapData?.transactionId;
+          if (mappedTxId) {
+            const txSnap = await db
+              .collection('transactions')
+              .doc(mappedTxId)
+              .get();
+            if (txSnap.exists) {
+              console.log(
+                '✅ [WEBHOOK SERVICE] Found transaction via virtual_account_mappings (customer_id):',
+                mappedTxId,
+              );
+              return txSnap;
+            }
+          }
+        }
+      }
+
+      // fallback: receiver account number mapping
+      const receiverAccountRaw = receiver?.account_number;
+      if (receiverAccountRaw) {
+        const normalizedLookup = String(receiverAccountRaw).replace(/\D/g, '');
+        if (normalizedLookup) {
+          console.log(
+            '🔎 [WEBHOOK SERVICE] Checking virtual_account_mappings for receiver account',
+            normalizedLookup,
+          );
+          const mapDoc = await db
+            .collection('virtual_account_mappings')
+            .doc(normalizedLookup)
+            .get();
+          if (mapDoc.exists) {
+            const mapData = mapDoc.data() as
+              | { transactionId?: string }
+              | undefined;
+            const mappedTxId = mapData?.transactionId;
+            if (mappedTxId) {
+              const txSnap = await db
+                .collection('transactions')
+                .doc(mappedTxId)
+                .get();
+              if (txSnap.exists) {
+                console.log(
+                  '✅ [WEBHOOK SERVICE] Found transaction via virtual_account_mappings (receiver):',
+                  mappedTxId,
+                );
+                return txSnap;
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(
+        '⚠️ [WEBHOOK SERVICE] virtual_account_mappings lookup failed:',
+        err,
+      );
+    }
 
     // Strategy 1: Match by transaction_id in reference field
     if (transaction_id) {
@@ -129,7 +223,7 @@ export class WebhookService {
       );
       const byIdSnap = await db
         .collection('transactions')
-        .doc(transaction_id)
+        .doc(String(transaction_id))
         .get();
 
       if (byIdSnap.exists) {
@@ -146,9 +240,10 @@ export class WebhookService {
       console.log(
         '🎯 [WEBHOOK SERVICE] Strategy 3: Searching by customer_id...',
       );
+
       const byCustSnap = await db
         .collection('transactions')
-        .where('reference', '==', customer.customer_id)
+        .where('reference', '==', String(customer.customer_id))
         .limit(1)
         .get();
 
@@ -157,18 +252,31 @@ export class WebhookService {
           '✅ [WEBHOOK SERVICE] Found transaction by customer_id:',
           customer.customer_id,
         );
+
         return byCustSnap.docs[0];
       }
     }
 
-    // Strategy 4: Fallback by amount + PENDING status
+    // Normalize amount_paid if it's a string (some gateways send numbers as strings)
+    let normalizedAmount: number | null = null;
     if (typeof amount_paid === 'number') {
+      normalizedAmount = amount_paid;
+    } else if (typeof amount_paid === 'string') {
+      const parsed = parseFloat(amount_paid.replace(/,/g, ''));
+      if (!Number.isNaN(parsed)) normalizedAmount = parsed;
+    }
+
+    // Strategy 4: Fallback by amount + PENDING status
+    if (normalizedAmount !== null) {
       console.log(
         '🎯 [WEBHOOK SERVICE] Strategy 4: Searching by amount fallback...',
       );
+      // amount stored in transactions may be integer NGN for deposits
+      const roundedAmount = Math.round(normalizedAmount);
+
       const fallbackSnap = await db
         .collection('transactions')
-        .where('amount', '==', amount_paid)
+        .where('amount', '==', roundedAmount)
         .where('status', '==', 'PENDING')
         .orderBy('createdAt', 'desc')
         .limit(1)
@@ -177,37 +285,149 @@ export class WebhookService {
       if (!fallbackSnap.empty) {
         console.log(
           '✅ [WEBHOOK SERVICE] Found transaction by amount fallback:',
-          amount_paid,
+          roundedAmount,
         );
         return fallbackSnap.docs[0];
       }
     }
 
-    console.error('❌ [WEBHOOK SERVICE] No matching transaction found', {
-      transaction_id,
-      customer_id: customer?.customer_id,
-      amount_paid,
-    });
+    // Strategy 5: Match by receiver account number -> virtual_accounts -> user's pending transaction
+    try {
+      const receiverAccount = receiver?.account_number;
+      if (receiverAccount) {
+        console.log(
+          '🎯 [WEBHOOK SERVICE] Strategy 5: Searching by receiver account number...',
+          receiverAccount,
+        );
+
+        type BankAccount = { accountNumber?: string };
+        type VirtualAccountDoc = { bankAccounts?: BankAccount[] } & Record<
+          string,
+          unknown
+        >;
+
+        const virtualSnap = await db.collection('virtual_accounts').get();
+        for (const doc of virtualSnap.docs) {
+          const data = doc.data() as VirtualAccountDoc | undefined;
+          const banks: BankAccount[] =
+            (data?.bankAccounts as BankAccount[]) || [];
+
+          const normalizedReceiver = String(receiverAccount).replace(/\D/g, '');
+          const match = banks.find(
+            (b: BankAccount) =>
+              String(b?.accountNumber ?? '').replace(/\D/g, '') ===
+              normalizedReceiver,
+          );
+
+          if (match) {
+            const userId = doc.id;
+
+            // look for a pending transaction for this user with the normalized amount (rounded)
+            if (normalizedAmount !== null) {
+              const rounded = Math.round(normalizedAmount);
+              const userTxSnap = await db
+                .collection('transactions')
+                .where('userId', '==', userId)
+                .where('status', '==', 'PENDING')
+                .where('amount', '==', rounded)
+                .orderBy('createdAt', 'desc')
+                .limit(1)
+                .get();
+
+              if (!userTxSnap.empty) {
+                console.log(
+                  '✅ [WEBHOOK SERVICE] Found transaction by receiver account and amount:',
+                  userTxSnap.docs[0].id,
+                );
+                return userTxSnap.docs[0];
+              }
+            }
+
+            // If no amount match, return the latest pending transaction for this user
+            const latestPending = await db
+              .collection('transactions')
+              .where('userId', '==', userId)
+              .where('status', '==', 'PENDING')
+              .orderBy('createdAt', 'desc')
+              .limit(1)
+              .get();
+
+            if (!latestPending.empty) {
+              console.log(
+                '✅ [WEBHOOK SERVICE] Found transaction by receiver account (latest pending):',
+                latestPending.docs[0].id,
+              );
+              return latestPending.docs[0];
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error(
+        '⚠️ [WEBHOOK SERVICE] Receiver account matching failed:',
+        err,
+      );
+    }
+
+    // Extra debug: log normalized amount and a small snapshot of recent pending transactions
+    try {
+      const pendingSnap = await db
+        .collection('transactions')
+        .where('status', '==', 'PENDING')
+        .orderBy('createdAt', 'desc')
+        .limit(10)
+        .get();
+
+      const pendingList = pendingSnap.docs.map((d) => {
+        const dd = d.data() as Record<string, unknown> | undefined;
+        return {
+          id: d.id,
+          amount: dd && typeof dd['amount'] === 'number' ? dd['amount'] : null,
+          userId: dd && typeof dd['userId'] === 'string' ? dd['userId'] : null,
+          reference:
+            dd && typeof dd['reference'] === 'string' ? dd['reference'] : null,
+        };
+      });
+
+      const virtualSnap = await db.collection('virtual_accounts').get();
+      const virtualSummary = virtualSnap.docs.map((d) => {
+        const vd = d.data() as Record<string, unknown> | undefined;
+        const rawBanks =
+          vd && Array.isArray(vd['bankAccounts'])
+            ? (vd['bankAccounts'] as unknown[])
+            : [];
+        const bankAccounts = rawBanks.map((b) => {
+          const rb = b as Record<string, unknown> | undefined;
+          const acc =
+            rb && typeof rb['accountNumber'] === 'string'
+              ? rb['accountNumber']
+              : '';
+          return { accountNumber: acc };
+        });
+        return { id: d.id, bankAccounts };
+      });
+
+      console.error('❌ [WEBHOOK SERVICE] No matching transaction found', {
+        transaction_id,
+        customer_id: customer?.customer_id,
+        amount_paid,
+        normalizedAmount: normalizedAmount,
+        recentPending: pendingList,
+        virtualAccountsSnapshot: virtualSummary,
+      });
+    } catch (dbgErr) {
+      console.error(
+        '⚠️ [WEBHOOK SERVICE] Failed to collect debug info for unmatched webhook:',
+        dbgErr,
+      );
+      console.error('❌ [WEBHOOK SERVICE] No matching transaction found', {
+        transaction_id,
+        customer_id: customer?.customer_id,
+        amount_paid,
+      });
+    }
 
     return null;
-  }
-
-  /**
-   * Create transaction history entry
-   */
-  private async createTransactionHistory(
-    transactionId: string,
-    userId: string,
-    description: string,
-    meta: Record<string, unknown>,
-  ): Promise<void> {
-    await db.collection('transaction_histories').add({
-      transactionId,
-      userId,
-      description,
-      meta,
-      createdAt: new Date(),
-    });
   }
 
   /**
@@ -222,8 +442,7 @@ export class WebhookService {
     console.log('📝 [WEBHOOK SERVICE] Transaction ID:', txId);
     console.log('👤 [WEBHOOK SERVICE] User ID:', txData.userId);
 
-    const { transaction_id, amount_paid, settlement_amount, settlement_fee } =
-      payload;
+    const { transaction_id, amount_paid } = payload;
 
     // Get full transaction details to check type
     const txSnapshot = await db.collection('transactions').doc(txId).get();
@@ -232,32 +451,51 @@ export class WebhookService {
 
     console.log('🔍 [WEBHOOK SERVICE] Transaction type:', transactionType);
 
-    // Update transaction status
-    await this.transactionsService.update(txId, { status: 'SUCCESS' });
-    console.log('✅ [WEBHOOK SERVICE] Transaction marked as SUCCESS:', txId);
-
-    // Create history entry for successful payment
-    await this.createTransactionHistory(
+    // Update transaction status and create a single history entry via TransactionsService
+    await this.transactionsService.update(
       txId,
-      txData.userId,
+      { status: 'SUCCESS' },
       `Payment confirmed by PaymentPoint: ${transaction_id ?? 'n/a'}`,
-      {
-        transaction_id,
-        amount_paid,
-        settlement_amount,
-        settlement_fee,
-      },
+    );
+    console.log(
+      '✅ [WEBHOOK SERVICE] Transaction marked as SUCCESS and history recorded:',
+      txId,
     );
 
-    console.log('📚 [WEBHOOK SERVICE] Transaction history entry created');
+    // Persist provider transaction id on our transaction doc for reference/audit
+    if (transaction_id) {
+      try {
+        await db
+          .collection('transactions')
+          .doc(txId)
+          .update({ referenceId: String(transaction_id) });
+
+        console.log(
+          '🔗 [WEBHOOK SERVICE] Recorded provider transaction_id as referenceId:',
+          transaction_id,
+        );
+      } catch (refErr) {
+        console.warn(
+          '⚠️ [WEBHOOK SERVICE] Failed to save referenceId on transaction:',
+          refErr,
+        );
+      }
+    }
 
     // Handle based on transaction type
     if (transactionType === 'DEPOSIT') {
       // This is a wallet deposit
       console.log('💳 [WEBHOOK SERVICE] Processing wallet deposit...');
       try {
-        const depositAmount =
-          (fullTxData?.amount as number) || amount_paid || 0;
+        // Normalize deposit amount to a number (fullTxData.amount preferred)
+        const rawAmount =
+          (fullTxData?.amount as number | undefined) ?? amount_paid ?? 0;
+        let depositAmount = 0;
+        if (typeof rawAmount === 'number') depositAmount = rawAmount;
+        else if (typeof rawAmount === 'string') {
+          const parsed = parseFloat(rawAmount.replace(/,/g, ''));
+          depositAmount = Number.isNaN(parsed) ? 0 : parsed;
+        }
 
         await this.walletService.processDeposit(
           txData.userId,
@@ -272,6 +510,49 @@ export class WebhookService {
             amount: depositAmount,
           },
         );
+
+        // Remove mapping using provider customer_id when available; fallback to receiver account
+        try {
+          const custKey =
+            payload.customer && typeof payload.customer === 'object'
+              ? (payload.customer as { customer_id?: string })?.customer_id
+              : undefined;
+
+          if (custKey) {
+            const key = String(custKey).trim();
+            await db.collection('virtual_account_mappings').doc(key).delete();
+            console.log(
+              '[WEBHOOK] Removed virtual_account_mappings for customer_id',
+              key,
+            );
+          } else {
+            const receiverAccountRaw =
+              payload.receiver && typeof payload.receiver === 'object'
+                ? (payload.receiver as { account_number?: string })
+                    ?.account_number
+                : undefined;
+
+            if (receiverAccountRaw) {
+              const normalized = String(receiverAccountRaw).replace(/\D/g, '');
+              if (normalized) {
+                await db
+                  .collection('virtual_account_mappings')
+                  .doc(normalized)
+                  .delete();
+
+                console.log(
+                  '[WEBHOOK] Removed virtual_account_mappings for',
+                  normalized,
+                );
+              }
+            }
+          }
+        } catch (delErr) {
+          console.warn(
+            '[WEBHOOK] Failed to delete virtual_account_mappings entry:',
+            delErr,
+          );
+        }
       } catch (err) {
         console.error(
           '❌ [WEBHOOK SERVICE] Error processing wallet deposit:',
@@ -377,23 +658,15 @@ export class WebhookService {
     txData: TransactionDoc,
     payload: WebhookPayload,
   ): Promise<void> {
-    const { transaction_id, amount_paid, transaction_status } = payload;
+    const { transaction_status } = payload;
 
-    // Update transaction status
-    await this.transactionsService.update(txId, { status: 'FAILED' });
-    console.log('❌ Transaction marked as FAILED:', txId);
-
-    // Create history entry for failed payment
-    await this.createTransactionHistory(
+    // Update transaction status and create a single history entry via TransactionsService
+    await this.transactionsService.update(
       txId,
-      txData.userId,
+      { status: 'FAILED' },
       `Payment failed or not successful: ${transaction_status}`,
-      {
-        transaction_id,
-        amount_paid,
-        transaction_status,
-      },
     );
+    console.log('❌ Transaction marked as FAILED and history recorded:', txId);
   }
 
   /**
