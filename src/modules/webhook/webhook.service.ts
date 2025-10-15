@@ -125,6 +125,15 @@ export class WebhookService {
       amount_paid,
     });
 
+    // Normalize amount_paid so mapping checks can validate amounts consistently
+    let normalizedAmount: number | null = null;
+    if (typeof amount_paid === 'number') {
+      normalizedAmount = amount_paid;
+    } else if (typeof amount_paid === 'string') {
+      const parsed = parseFloat(amount_paid.replace(/,/g, ''));
+      if (!Number.isNaN(parsed)) normalizedAmount = parsed;
+    }
+
     // Quick deterministic mapping lookup: prefer customer_id mapping, fallback to receiver account mapping
     try {
       const custId = customer?.customer_id;
@@ -140,7 +149,7 @@ export class WebhookService {
           .get();
         if (mapDoc.exists) {
           const mapData = mapDoc.data() as
-            | { transactionId?: string }
+            | { transactionId?: string; userId?: string }
             | undefined;
           const mappedTxId = mapData?.transactionId;
           if (mappedTxId) {
@@ -149,11 +158,45 @@ export class WebhookService {
               .doc(mappedTxId)
               .get();
             if (txSnap.exists) {
-              console.log(
-                '✅ [WEBHOOK SERVICE] Found transaction via virtual_account_mappings (customer_id):',
-                mappedTxId,
-              );
-              return txSnap;
+              const txData = txSnap.data() as TransactionDoc | undefined;
+
+              // Require the mapped transaction to be PENDING to avoid re-processing
+              if (txData && txData.status !== 'PENDING') {
+                console.warn(
+                  '[WEBHOOK] Mapped transaction is not PENDING, ignoring mapping:',
+                  mappedTxId,
+                );
+              } else {
+                // If amount is present in webhook, validate it matches the transaction amount
+                if (
+                  normalizedAmount !== null &&
+                  txData &&
+                  typeof txData.amount === 'number'
+                ) {
+                  const expected = Math.round(txData.amount);
+                  const received = Math.round(normalizedAmount);
+                  if (expected !== received) {
+                    console.warn(
+                      '[WEBHOOK] Amount mismatch for mapped transaction (customer_id):',
+                      { mappedTxId, expected, received },
+                    );
+                    // do not return this mapping if amount mismatches
+                  } else {
+                    console.log(
+                      '✅ [WEBHOOK SERVICE] Found transaction via virtual_account_mappings (customer_id):',
+                      mappedTxId,
+                    );
+                    return txSnap;
+                  }
+                } else {
+                  // No amount to validate or no amount on transaction — accept mapping
+                  console.log(
+                    '✅ [WEBHOOK SERVICE] Found transaction via virtual_account_mappings (customer_id):',
+                    mappedTxId,
+                  );
+                  return txSnap;
+                }
+              }
             }
           }
         }
@@ -174,7 +217,7 @@ export class WebhookService {
             .get();
           if (mapDoc.exists) {
             const mapData = mapDoc.data() as
-              | { transactionId?: string }
+              | { transactionId?: string; userId?: string }
               | undefined;
             const mappedTxId = mapData?.transactionId;
             if (mappedTxId) {
@@ -183,11 +226,40 @@ export class WebhookService {
                 .doc(mappedTxId)
                 .get();
               if (txSnap.exists) {
-                console.log(
-                  '✅ [WEBHOOK SERVICE] Found transaction via virtual_account_mappings (receiver):',
-                  mappedTxId,
-                );
-                return txSnap;
+                const txData = txSnap.data() as TransactionDoc | undefined;
+
+                // Require PENDING and validate amount when available
+                if (txData && txData.status !== 'PENDING') {
+                  console.warn(
+                    '[WEBHOOK] Mapped transaction (receiver) is not PENDING, ignoring:',
+                    mappedTxId,
+                  );
+                } else if (
+                  normalizedAmount !== null &&
+                  txData &&
+                  typeof txData.amount === 'number'
+                ) {
+                  const expected = Math.round(txData.amount);
+                  const received = Math.round(normalizedAmount);
+                  if (expected !== received) {
+                    console.warn(
+                      '[WEBHOOK] Amount mismatch for mapped transaction (receiver):',
+                      { mappedTxId, expected, received },
+                    );
+                  } else {
+                    console.log(
+                      '✅ [WEBHOOK SERVICE] Found transaction via virtual_account_mappings (receiver):',
+                      mappedTxId,
+                    );
+                    return txSnap;
+                  }
+                } else {
+                  console.log(
+                    '✅ [WEBHOOK SERVICE] Found transaction via virtual_account_mappings (receiver):',
+                    mappedTxId,
+                  );
+                  return txSnap;
+                }
               }
             }
           }
@@ -198,41 +270,6 @@ export class WebhookService {
         '⚠️ [WEBHOOK SERVICE] virtual_account_mappings lookup failed:',
         err,
       );
-    }
-
-    // Strategy 1: Match by transaction_id in reference field
-    if (transaction_id) {
-      console.log('🎯 [WEBHOOK SERVICE] Strategy 1: Searching by reference...');
-      const byRefSnap = await db
-        .collection('transactions')
-        .where('reference', '==', transaction_id)
-        .limit(1)
-        .get();
-
-      if (!byRefSnap.empty) {
-        console.log(
-          '✅ [WEBHOOK SERVICE] Found transaction by reference:',
-          transaction_id,
-        );
-        return byRefSnap.docs[0];
-      }
-
-      // Strategy 2: Match by document ID
-      console.log(
-        '🎯 [WEBHOOK SERVICE] Strategy 2: Searching by document ID...',
-      );
-      const byIdSnap = await db
-        .collection('transactions')
-        .doc(String(transaction_id))
-        .get();
-
-      if (byIdSnap.exists) {
-        console.log(
-          '✅ [WEBHOOK SERVICE] Found transaction by document ID:',
-          transaction_id,
-        );
-        return byIdSnap;
-      }
     }
 
     // Strategy 3: Match by customer_id
@@ -257,14 +294,7 @@ export class WebhookService {
       }
     }
 
-    // Normalize amount_paid if it's a string (some gateways send numbers as strings)
-    let normalizedAmount: number | null = null;
-    if (typeof amount_paid === 'number') {
-      normalizedAmount = amount_paid;
-    } else if (typeof amount_paid === 'string') {
-      const parsed = parseFloat(amount_paid.replace(/,/g, ''));
-      if (!Number.isNaN(parsed)) normalizedAmount = parsed;
-    }
+    // (amount normalization already performed earlier in this function)
 
     // Strategy 4: Fallback by amount + PENDING status
     if (normalizedAmount !== null) {
@@ -430,9 +460,6 @@ export class WebhookService {
     return null;
   }
 
-  /**
-   * Process successful payment
-   */
   private async processSuccessfulPayment(
     txId: string,
     txData: TransactionDoc,
@@ -451,16 +478,8 @@ export class WebhookService {
 
     console.log('🔍 [WEBHOOK SERVICE] Transaction type:', transactionType);
 
-    // Update transaction status and create a single history entry via TransactionsService
-    await this.transactionsService.update(
-      txId,
-      { status: 'SUCCESS' },
-      `Payment confirmed by PaymentPoint: ${transaction_id ?? 'n/a'}`,
-    );
-    console.log(
-      '✅ [WEBHOOK SERVICE] Transaction marked as SUCCESS and history recorded:',
-      txId,
-    );
+    // For DEPOSIT transactions we validate customer_id and amount before marking SUCCESS.
+    // For non-deposit (purchase) we will mark SUCCESS below before finalization.
 
     // Persist provider transaction id on our transaction doc for reference/audit
     if (transaction_id) {
@@ -487,6 +506,109 @@ export class WebhookService {
       // This is a wallet deposit
       console.log('💳 [WEBHOOK SERVICE] Processing wallet deposit...');
       try {
+        // --- Validate provider customer_id against our virtual_account.customer.customer_id ---
+        const providerCustId =
+          payload.customer && typeof payload.customer === 'object'
+            ? (payload.customer as { customer_id?: string })?.customer_id
+            : undefined;
+
+        if (providerCustId) {
+          try {
+            const vaSnap = await db
+              .collection('virtual_accounts')
+              .doc(txData.userId)
+              .get();
+            if (vaSnap.exists) {
+              const vaData = vaSnap.data() as
+                | Record<string, unknown>
+                | undefined;
+              const vaCustObj =
+                vaData && typeof vaData['customer'] === 'object'
+                  ? (vaData['customer'] as { customer_id?: string })
+                  : undefined;
+              const expectedCustId = vaCustObj?.customer_id;
+              if (
+                expectedCustId &&
+                String(expectedCustId).trim() !== String(providerCustId).trim()
+              ) {
+                console.warn(
+                  '[WEBHOOK] provider customer_id does not match virtual_account customer_id for user:',
+                  txData.userId,
+                  { expected: expectedCustId, received: providerCustId },
+                );
+                // mark transaction for investigation and return
+                await db.collection('transactions').doc(txId).update({
+                  investigationRequired: true,
+                  failureReason: 'provider_customer_id_mismatch',
+                  providerCustomerId: providerCustId,
+                  expectedCustomerId: expectedCustId,
+                  investigationTimestamp: new Date(),
+                });
+                return;
+              }
+            }
+          } catch (vaErr) {
+            console.warn(
+              '[WEBHOOK] Failed to validate virtual_account customer_id:',
+              vaErr,
+            );
+          }
+        }
+
+        // --- Validate amount if provided ---
+        let normalizedAmount: number | null = null;
+        if (typeof amount_paid === 'number') normalizedAmount = amount_paid;
+        else if (typeof amount_paid === 'string') {
+          const parsed = parseFloat(amount_paid.replace(/,/g, ''));
+          if (!Number.isNaN(parsed)) normalizedAmount = parsed;
+        }
+
+        if (
+          normalizedAmount !== null &&
+          typeof fullTxData?.amount === 'number'
+        ) {
+          const expected = Math.round(fullTxData.amount);
+          const received = Math.round(normalizedAmount);
+          if (expected !== received) {
+            console.warn('[WEBHOOK] Amount mismatch for transaction:', txId, {
+              expected,
+              received,
+            });
+            await db.collection('transactions').doc(txId).update({
+              investigationRequired: true,
+              failureReason: 'amount_mismatch',
+              expectedAmount: expected,
+              receivedAmount: received,
+              investigationTimestamp: new Date(),
+            });
+            return;
+          }
+        }
+
+        // All validations passed — mark transaction SUCCESS and record provider reference
+        await this.transactionsService.update(
+          txId,
+          { status: 'SUCCESS' },
+          `Payment confirmed by PaymentPoint: ${transaction_id ?? 'n/a'}`,
+        );
+
+        if (transaction_id) {
+          try {
+            await db
+              .collection('transactions')
+              .doc(txId)
+              .update({ referenceId: String(transaction_id) });
+            console.log(
+              '🔗 [WEBHOOK SERVICE] Recorded provider transaction_id as referenceId:',
+              transaction_id,
+            );
+          } catch (refErr) {
+            console.warn(
+              '⚠️ [WEBHOOK SERVICE] Failed to save referenceId on transaction:',
+              refErr,
+            );
+          }
+        }
         // Normalize deposit amount to a number (fullTxData.amount preferred)
         const rawAmount =
           (fullTxData?.amount as number | undefined) ?? amount_paid ?? 0;
