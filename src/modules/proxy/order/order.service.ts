@@ -1,8 +1,10 @@
+/* eslint-disable @typescript-eslint/no-unsafe-return */
+/* eslint-disable @typescript-eslint/no-unsafe-call */
 /* eslint-disable @typescript-eslint/no-unsafe-member-access */
 /* eslint-disable @typescript-eslint/no-unsafe-assignment */
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import axios, { AxiosInstance } from 'axios';
-import { FieldValue } from 'firebase-admin/firestore';
+import { DocumentSnapshot, FieldValue } from 'firebase-admin/firestore';
 import { db } from 'src/main';
 import { PaymentpointService } from 'src/modules/paymentpoint/paymentpoint.service';
 import {
@@ -1124,15 +1126,24 @@ export class ProxyOrderService {
         .orderBy('createdAt', 'desc');
 
       // limit and get are dynamic Firestore query calls - narrow with casts
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       if (limit && limit > 0) q = q.limit(limit);
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
       const snap = await q.get();
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
-      return snap.docs.map((d: any) => ({
-        id: d.id,
-        ...(d.data ? d.data() : d.data),
-      })) as any[];
+      return snap.docs.map((doc: unknown) => {
+        const docSnap = doc as DocumentSnapshot<Record<string, unknown>>;
+        // Use the DocumentSnapshot.data() accessor when available; it
+        // returns the document's data (or undefined). This is typed and
+        // avoids unsafe calls of any-typed values.
+        const dataObj = (
+          typeof docSnap.data === 'function'
+            ? docSnap.data()
+            : (docSnap as any).data
+        ) as Record<string, unknown> | undefined;
+
+        return {
+          id: (docSnap as any).id,
+          ...(dataObj || {}),
+        } as Record<string, unknown>;
+      });
     } catch (error) {
       console.error('Error fetching provider mappings:', error);
       throw new HttpException(
