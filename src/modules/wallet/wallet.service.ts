@@ -82,6 +82,42 @@ export class WalletService {
       referenceId: transaction.id,
     });
 
+    // Create a deterministic mapping from virtual account number -> transactionId
+    try {
+      const vSnap = await db.collection('virtual_accounts').doc(userId).get();
+      if (vSnap.exists) {
+        const vData = vSnap.data() as Record<string, unknown> | undefined;
+        // Prefer provider-supplied customer_id on the virtual account as the mapping key
+        const custObj =
+          vData && typeof vData['customer'] === 'object'
+            ? (vData['customer'] as Record<string, unknown>)
+            : undefined;
+        const customerId =
+          custObj && typeof custObj['customer_id'] === 'string'
+            ? custObj['customer_id']
+            : undefined;
+
+        if (customerId) {
+          const key = String(customerId).trim();
+          await db.collection('virtual_account_mappings').doc(key).set({
+            transactionId: transaction.id,
+            userId,
+            key,
+            amount: amountNGN,
+            createdAt: new Date(),
+          });
+          console.log(
+            '[WALLET] Created virtual account mapping for customer_id',
+            key,
+            '->',
+            transaction.id,
+          );
+        }
+      }
+    } catch (err) {
+      console.warn('[WALLET] Failed to create virtual account mapping:', err);
+    }
+
     return {
       transactionId: transaction.id,
       message:

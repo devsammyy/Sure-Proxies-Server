@@ -98,7 +98,11 @@ export class TransactionsService {
   //   return updated;
   // }
 
-  async update(id: string, dto: UpdateTransactionDto): Promise<Transaction> {
+  async update(
+    id: string,
+    dto: UpdateTransactionDto,
+    historyMessage?: string,
+  ): Promise<Transaction> {
     const ref = db.collection(this.collection).doc(id);
     const existing = await ref.get();
 
@@ -114,11 +118,10 @@ export class TransactionsService {
     await ref.update({ status: dto.status });
     const updated = { ...transaction, status: dto.status };
 
-    await this.createHistory(
-      id,
-      transaction.userId,
-      `Transaction status updated to ${dto.status}`,
-    );
+    // Use caller-provided history message when available to avoid duplicate/overlapping history entries
+    const message =
+      historyMessage || `Transaction status updated to ${dto.status}`;
+    await this.createHistory(id, transaction.userId, message);
 
     return updated;
   }
