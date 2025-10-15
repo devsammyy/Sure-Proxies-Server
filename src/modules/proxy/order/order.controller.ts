@@ -164,4 +164,39 @@ export class ProxyOrderController {
   ) {
     return this.proxyOrderService.createConfig(globalMarkup, perServiceMarkup);
   }
+
+  @Get('admin/config')
+  @ApAuthGuard(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Get pricing config (Admin only)' })
+  async getConfig() {
+    return this.proxyOrderService.getPricingConfig();
+  }
+
+  @Get('admin/provider-mappings')
+  @ApAuthGuard(UserRole.ADMIN)
+  @ApiOperation({ summary: 'List provider -> user mappings (Admin only)' })
+  async listProviderMappings(@Query('limit') limit?: string): Promise<any> {
+    const l = limit ? parseInt(limit, 10) : undefined;
+    return await this.proxyOrderService.getProviderMappings(l);
+  }
+
+  @Get('admin/provider-mappings/:providerId')
+  @ApAuthGuard(UserRole.ADMIN)
+  @ApiOperation({
+    summary: 'Get a provider mapping by providerId (Admin only)',
+  })
+  async getProviderMapping(@Param('providerId') providerId: string) {
+    return this.proxyOrderService.getProviderMapping(providerId);
+  }
+
+  @Post('admin/provider-mappings/:providerId/claim')
+  @ApAuthGuard(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Claim a provider mapping (Admin only)' })
+  async claimProviderMapping(
+    @Param('providerId') providerId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const adminId = req.user?.uid || 'unknown-admin';
+    return this.proxyOrderService.claimProviderMapping(providerId, adminId);
+  }
 }

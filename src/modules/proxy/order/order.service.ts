@@ -154,7 +154,7 @@ export class ProxyOrderService {
   }
 
   /** Fetch pricing config from Firestore */
-  private async getPricingConfig() {
+  async getPricingConfig() {
     try {
       const configDoc = await db.collection('config').doc('pricing').get();
       if (!configDoc.exists) return { globalMarkup: 0, perServiceMarkup: {} };
@@ -1114,6 +1114,116 @@ export class ProxyOrderService {
   async getAllPurchases(): Promise<PurchaseOrderModel[]> {
     const purchasesSnap = await db.collection('purchases').get();
     return purchasesSnap.docs.map((doc) => doc.data() as PurchaseOrderModel);
+  }
+
+  /** Admin: List provider -> user mappings (recent first). Optional limit */
+  async getProviderMappings(limit?: number) {
+    try {
+      let q: any = db
+        .collection('provider_order_mappings')
+        .orderBy('createdAt', 'desc');
+
+      // limit and get are dynamic Firestore query calls - narrow with casts
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      if (limit && limit > 0) q = q.limit(limit);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-call
+      const snap = await q.get();
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+      return snap.docs.map((d: any) => ({
+        id: d.id,
+        ...(d.data ? d.data() : d.data),
+      })) as any[];
+    } catch (error) {
+      console.error('Error fetching provider mappings:', error);
+      throw new HttpException(
+        'Failed to fetch provider mappings',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /** Admin: Get a provider mapping by provider id */
+  async getProviderMapping(providerId: string) {
+    try {
+      const doc = await db
+        .collection('provider_order_mappings')
+        .doc(String(providerId))
+        .get();
+
+      if (!doc.exists) return null;
+      return { id: doc.id, ...doc.data() };
+    } catch (error) {
+      console.error('Error fetching provider mapping:', error);
+      throw new HttpException(
+        'Failed to fetch provider mapping',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
+  }
+
+  /** Admin: Claim a provider mapping - mark as claimed by admin user */
+  async claimProviderMapping(providerId: string, adminUserId: string) {
+    try {
+      const ref = db
+        .collection('provider_order_mappings')
+        .doc(String(providerId));
+      const snap = await ref.get();
+      if (!snap.exists) {
+        throw new HttpException(
+          'Provider mapping not found',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      const existing = snap.data() as any;
+
+      const now = new Date();
+      await ref.set(
+        {
+          claimed: true,
+          claimedBy: adminUserId,
+          claimedAt: now,
+        },
+        { merge: true },
+      );
+
+      // If mapping references a purchase, attach provider id and payload to that purchase
+      try {
+        const purchaseId = existing?.purchaseId;
+        if (purchaseId) {
+          const purchaseRef = db
+            .collection('purchases')
+            .doc(String(purchaseId));
+          await purchaseRef.set(
+            {
+              providerOrderId: String(providerId),
+              providerPayload: existing?.providerPayload || null,
+              updatedAt: now,
+            },
+            { merge: true },
+          );
+          console.log(
+            '✅ [CLAIM] Attached provider id to purchase:',
+            purchaseId,
+          );
+        }
+      } catch (attachErr) {
+        console.error(
+          '❌ [CLAIM] Failed to attach provider id to purchase:',
+          attachErr,
+        );
+      }
+
+      const updated = await ref.get();
+      return { id: updated.id, ...updated.data() };
+    } catch (error) {
+      console.error('Error claiming provider mapping:', error);
+      if (error instanceof HttpException) throw error;
+      throw new HttpException(
+        'Failed to claim provider mapping',
+        HttpStatus.INTERNAL_SERVER_ERROR,
+      );
+    }
   }
 
   /** Admin: Update markup */

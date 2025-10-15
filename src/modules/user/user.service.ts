@@ -73,21 +73,174 @@ export class UserService {
 
   public async findAll(): Promise<UserDoc[]> {
     const usersSnapshot = await db.collection('users').get();
+    // Simple formatter: attempt to call .toDate() if available, otherwise stringify
+    const fmt = (val: unknown): string | null => {
+      if (!val) return null;
+      // If it's a Firestore Timestamp, convert safely
+      if (val instanceof admin.firestore.Timestamp) {
+        try {
+          return val.toDate().toISOString();
+        } catch (e) {
+          void e;
+        }
+      }
+      if (typeof val === 'string') return val;
+      if (typeof val === 'number') return new Date(val).toISOString();
+      try {
+        return JSON.stringify(val);
+      } catch {
+        return String(val);
+      }
+    };
 
     return usersSnapshot.docs.map((doc) => {
-      const data = doc.data() as UserDoc | undefined;
+      const data = doc.data() as Record<string, unknown> | undefined;
 
       return {
-        uid: data?.uid,
-        email: data?.email,
-        fullName: data?.fullName,
-        phoneNumber: data?.phoneNumber,
-        createdAt: data?.createdAt,
-        lastLogin: data?.lastLogin,
-        purchases: (data?.purchases as unknown[]) ?? [],
-        role: data?.role ?? UserRole.USER,
+        id: doc.id,
+        uid: data && typeof data.uid === 'string' ? data.uid : doc.id,
+        email: data && typeof data.email === 'string' ? data.email : '',
+        fullName:
+          data && typeof data.fullName === 'string' ? data.fullName : '',
+        phoneNumber:
+          data && typeof data.phoneNumber === 'string' ? data.phoneNumber : '',
+        createdAt: fmt(data ? data['createdAt'] : undefined),
+        lastLogin: fmt(data ? data['lastLogin'] : undefined),
+        purchases:
+          data && Array.isArray(data['purchases'])
+            ? (data['purchases'] as unknown[])
+            : [],
+        role: (data && (data['role'] as UserRole)) ?? UserRole.USER,
       } as UserDoc;
     });
+  }
+
+  /**
+   * Simple offset-based pagination. Returns { total, page, limit, data }
+   */
+  public async findPaginated(
+    page: number,
+    limit: number,
+    q?: string,
+  ): Promise<{ total: number; page: number; limit: number; data: UserDoc[] }> {
+    const col = db.collection('users');
+
+    // Build base query
+    const query: FirebaseFirestore.Query = col.orderBy('createdAt', 'desc');
+
+    // Basic text search on email or fullName if 'q' provided
+    if (q && q.trim()) {
+      const trimmed = q.trim().toLowerCase();
+      // Firestore doesn't support OR easily; fallback: fetch more and filter client-side
+      const snapshot = await query.get();
+      const allDocs = snapshot.docs.map((d) => ({ id: d.id, data: d.data() }));
+      const filtered = allDocs.filter((it) => {
+        const data = it.data as Record<string, unknown> | undefined;
+        const email = (
+          data && typeof data.email === 'string' ? data.email : ''
+        ).toLowerCase();
+        const name = (
+          data && typeof data.fullName === 'string' ? data.fullName : ''
+        ).toLowerCase();
+        return email.includes(trimmed) || name.includes(trimmed);
+      });
+      const total = filtered.length;
+      const start = (page - 1) * limit;
+      const pageDocs = filtered.slice(start, start + limit);
+      const fmt = (val: unknown): string | null => {
+        if (!val) return null;
+        try {
+          const maybeTs = val as any;
+          if (maybeTs && typeof maybeTs.toDate === 'function') {
+            try {
+              return maybeTs.toDate().toISOString();
+            } catch (e) {
+              void e;
+            }
+          }
+        } catch (e) {
+          void e;
+        }
+        if (typeof val === 'string') return val;
+        if (typeof val === 'number') return new Date(val).toISOString();
+        try {
+          return JSON.stringify(val);
+        } catch {
+          return String(val);
+        }
+      };
+
+      const data = pageDocs.map((d) => {
+        const data = d.data as Record<string, unknown> | undefined;
+        return {
+          id: d.id,
+          uid: data && typeof data.uid === 'string' ? data.uid : d.id,
+          email: data && typeof data.email === 'string' ? data.email : '',
+          fullName:
+            data && typeof data.fullName === 'string' ? data.fullName : '',
+          phoneNumber:
+            data && typeof data.phoneNumber === 'string'
+              ? data.phoneNumber
+              : '',
+          createdAt: fmt(data ? data['createdAt'] : undefined),
+          lastLogin: fmt(data ? data['lastLogin'] : undefined),
+          purchases:
+            data && Array.isArray(data['purchases'])
+              ? (data['purchases'] as unknown[])
+              : [],
+          role: (data && (data['role'] as UserRole)) ?? UserRole.USER,
+        } as UserDoc;
+      });
+
+      return { total, page, limit, data };
+    }
+
+    // Non-search path: use offset/limit
+    const offset = (page - 1) * limit;
+    const totalSnapshot = await col.get();
+    const total = totalSnapshot.size;
+
+    const snapshot = await query.offset(offset).limit(limit).get();
+
+    const fmt = (val: unknown): string | null => {
+      if (!val) return null;
+      if (val instanceof admin.firestore.Timestamp) {
+        try {
+          return val.toDate().toISOString();
+        } catch (e) {
+          void e;
+        }
+      }
+      if (typeof val === 'string') return val;
+      if (typeof val === 'number') return new Date(val).toISOString();
+      try {
+        return JSON.stringify(val);
+      } catch {
+        return String(val);
+      }
+    };
+
+    const data = snapshot.docs.map((doc) => {
+      const data = doc.data() as Record<string, unknown> | undefined;
+      return {
+        id: doc.id,
+        uid: data && typeof data.uid === 'string' ? data.uid : doc.id,
+        email: data && typeof data.email === 'string' ? data.email : '',
+        fullName:
+          data && typeof data.fullName === 'string' ? data.fullName : '',
+        phoneNumber:
+          data && typeof data.phoneNumber === 'string' ? data.phoneNumber : '',
+        createdAt: fmt(data ? data['createdAt'] : undefined),
+        lastLogin: fmt(data ? data['lastLogin'] : undefined),
+        purchases:
+          data && Array.isArray(data['purchases'])
+            ? (data['purchases'] as unknown[])
+            : [],
+        role: (data && (data['role'] as UserRole)) ?? UserRole.USER,
+      } as UserDoc;
+    });
+
+    return { total, page, limit, data };
   }
 
   async findOne(id: string) {
@@ -95,7 +248,41 @@ export class UserService {
     if (!user.exists) {
       throw new HttpException('Account not found', HttpStatus.NOT_FOUND);
     }
-    return { id: user.id, ...user.data() };
+    const data = user.data() as Record<string, unknown> | undefined;
+
+    const fmt = (val: unknown): string | null => {
+      if (!val) return null;
+      try {
+        // @ts-ignore
+        if (typeof val?.toDate === 'function') {
+          // @ts-ignore
+          return val.toDate().toISOString();
+        }
+      } catch (_) {}
+      if (typeof val === 'string') return val;
+      if (typeof val === 'number') return new Date(val).toISOString();
+      try {
+        return JSON.stringify(val);
+      } catch {
+        return String(val);
+      }
+    };
+
+    return {
+      id: user.id,
+      uid: data && typeof data.uid === 'string' ? data.uid : user.id,
+      email: data && typeof data.email === 'string' ? data.email : '',
+      fullName: data && typeof data.fullName === 'string' ? data.fullName : '',
+      phoneNumber:
+        data && typeof data.phoneNumber === 'string' ? data.phoneNumber : '',
+      createdAt: fmt(data ? data['createdAt'] : undefined),
+      lastLogin: fmt(data ? data['lastLogin'] : undefined),
+      purchases:
+        data && Array.isArray(data['purchases'])
+          ? (data['purchases'] as unknown[])
+          : [],
+      role: (data && (data['role'] as UserRole)) ?? UserRole.USER,
+    };
   }
 
   async update(id: string, model: UserDoc) {

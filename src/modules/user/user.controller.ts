@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UsePipes,
   ValidationPipe,
 } from '@nestjs/common';
@@ -44,6 +45,23 @@ export class UserController {
   @ApAuthGuard(userModel.UserRole.ADMIN)
   findAll() {
     return this.userService.findAll();
+  }
+
+  @Get()
+  @ApiOperation({
+    summary: 'Get paginated users',
+    description:
+      'Get users with server-side pagination. Query params: page (1-based), limit, q (search)',
+  })
+  @ApAuthGuard(userModel.UserRole.ADMIN)
+  findPaginated(
+    @Query('page') page = '1',
+    @Query('limit') limit = '10',
+    @Query('q') q?: string,
+  ) {
+    const p = Math.max(1, Number.isNaN(Number(page)) ? 1 : Number(page));
+    const l = Math.max(1, Number.isNaN(Number(limit)) ? 10 : Number(limit));
+    return this.userService.findPaginated(p, l, q);
   }
 
   @Get(':id')
