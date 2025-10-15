@@ -10,7 +10,7 @@ import { Request } from 'express';
 import { ApAuthGuard } from 'src/modules/auth/auth-guard.decorator';
 import { UserRole } from 'src/modules/user/user.model';
 
-import { PriceInputDto, PurchaseOrderInputDto } from './order.dto';
+import { PriceInputDto, ProxyOrderPurchaseInputDto } from './order.dto';
 import { ProxyOrderModel, PurchaseOrderModel } from './order.model';
 import { ProxyOrderService } from './order.service';
 
@@ -87,13 +87,18 @@ export class ProxyOrderController {
   @Post(':serviceId/purchase')
   @ApiBody({
     description: 'Enter the options',
-    type: PurchaseOrderInputDto,
+    // Use the proxy purchase DTO which supports packageId / traffic-only variants
+    type: ProxyOrderPurchaseInputDto,
   })
   purchase(
     @Param('serviceId') serviceId: string,
-    @Body('model') model: PurchaseOrderInputDto,
+    @Body('model') model: ProxyOrderPurchaseInputDto,
   ) {
-    return this.proxyOrderService.purchaseProxy(serviceId, model);
+    // Cast via unknown to avoid unsafe-any lint warnings while preserving the explicit DTO type
+    return this.proxyOrderService.purchaseProxy(
+      serviceId,
+      model as unknown as ProxyOrderPurchaseInputDto,
+    );
   }
 
   @Post('finalize/:transactionId')
@@ -163,5 +168,40 @@ export class ProxyOrderController {
     @Body('perServiceMarkup') perServiceMarkup: Record<string, number>,
   ) {
     return this.proxyOrderService.createConfig(globalMarkup, perServiceMarkup);
+  }
+
+  @Get('admin/config')
+  @ApAuthGuard(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Get pricing config (Admin only)' })
+  async getConfig() {
+    return this.proxyOrderService.getPricingConfig();
+  }
+
+  @Get('admin/provider-mappings')
+  @ApAuthGuard(UserRole.ADMIN)
+  @ApiOperation({ summary: 'List provider -> user mappings (Admin only)' })
+  async listProviderMappings(@Query('limit') limit?: string): Promise<any> {
+    const l = limit ? parseInt(limit, 10) : undefined;
+    return await this.proxyOrderService.getProviderMappings(l);
+  }
+
+  @Get('admin/provider-mappings/:providerId')
+  @ApAuthGuard(UserRole.ADMIN)
+  @ApiOperation({
+    summary: 'Get a provider mapping by providerId (Admin only)',
+  })
+  async getProviderMapping(@Param('providerId') providerId: string) {
+    return this.proxyOrderService.getProviderMapping(providerId);
+  }
+
+  @Post('admin/provider-mappings/:providerId/claim')
+  @ApAuthGuard(UserRole.ADMIN)
+  @ApiOperation({ summary: 'Claim a provider mapping (Admin only)' })
+  async claimProviderMapping(
+    @Param('providerId') providerId: string,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const adminId = req.user?.uid || 'unknown-admin';
+    return this.proxyOrderService.claimProviderMapping(providerId, adminId);
   }
 }

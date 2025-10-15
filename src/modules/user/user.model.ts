@@ -16,8 +16,9 @@ export interface UserDoc {
   email: string;
   fullName: string;
   phoneNumber: string;
-  createdAt: admin.firestore.Timestamp;
-  lastLogin: admin.firestore.Timestamp;
+  // Timestamps may be Firestore Timestamp objects or serialized ISO strings (when returned by APIs)
+  createdAt: admin.firestore.Timestamp | string | null;
+  lastLogin: admin.firestore.Timestamp | string | null;
   purchases: unknown[];
   role: UserRole;
 }

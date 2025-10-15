@@ -11,6 +11,30 @@ import { TokenResponse } from 'src/modules/auth/auth.model';
 import { UserDoc, UserModel, UserRole } from '../user/user.model';
 import { LoginDto } from './auth.dto';
 
+// Helper: accept admin.firestore.Timestamp | string | number | null and return millis
+function isTimestampLike(v: unknown): v is admin.firestore.Timestamp {
+  return v instanceof admin.firestore.Timestamp;
+}
+
+function toMillisSafe(
+  v: admin.firestore.Timestamp | string | number | null | undefined,
+): number | null {
+  if (v == null) return null;
+  if (isTimestampLike(v)) {
+    try {
+      return v.toMillis();
+    } catch {
+      return null;
+    }
+  }
+  if (typeof v === 'string') {
+    const d = Date.parse(v);
+    return Number.isNaN(d) ? null : d;
+  }
+  if (typeof v === 'number') return v;
+  return null;
+}
+
 function extractFirebaseErrorMessage(err: unknown): string | undefined {
   if (typeof err !== 'object' || err === null) return undefined;
 
@@ -69,8 +93,8 @@ export class AuthService {
         email: raw.email,
         fullName: raw.fullName,
         phoneNumber: raw.phoneNumber,
-        createdAt: raw.createdAt.toMillis(),
-        lastLogin: raw.lastLogin.toMillis(),
+        createdAt: toMillisSafe(raw.createdAt) ?? 0,
+        lastLogin: toMillisSafe(raw.lastLogin) ?? 0,
         purchases: raw.purchases || [],
         role: raw.role,
       };
@@ -159,7 +183,10 @@ export class AuthService {
     }
 
     try {
-      const decodedToken = await dbAuth.verifyIdToken(token);
+      const decodedToken = (await dbAuth.verifyIdToken(token)) as {
+        uid: string;
+        email?: string;
+      };
       const userDoc = await db.collection('users').doc(decodedToken.uid).get();
 
       if (!userDoc.exists) {
@@ -175,14 +202,23 @@ export class AuthService {
 
       (req as unknown as { user: typeof userData }).user = userData;
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error verifying token: ', error);
 
-      // Check if token is expired
-      if (
-        error?.errorInfo?.code === 'auth/id-token-expired' ||
-        error?.code === 'auth/id-token-expired'
-      ) {
+      // Helper to safely extract nested codes from unknown errors
+      const extractCode = (e: unknown): string | undefined => {
+        if (typeof e !== 'object' || e === null) return undefined;
+        const obj = e as Record<string, unknown>;
+        if (obj.errorInfo && typeof obj.errorInfo === 'object') {
+          const info = obj.errorInfo as Record<string, unknown>;
+          if (typeof info.code === 'string') return info.code;
+        }
+        if (typeof obj.code === 'string') return obj.code;
+        return undefined;
+      };
+
+      const code = extractCode(error);
+      if (code === 'auth/id-token-expired') {
         throw new UnauthorizedException({
           message: 'Token expired',
           code: 'TOKEN_EXPIRED',
@@ -190,11 +226,7 @@ export class AuthService {
         });
       }
 
-      // Check if token is revoked
-      if (
-        error?.errorInfo?.code === 'auth/id-token-revoked' ||
-        error?.code === 'auth/id-token-revoked'
-      ) {
+      if (code === 'auth/id-token-revoked') {
         throw new UnauthorizedException({
           message: 'Token revoked',
           code: 'TOKEN_REVOKED',
