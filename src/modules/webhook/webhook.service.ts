@@ -1,7 +1,7 @@
 // webhook.service.ts
 import { Injectable } from '@nestjs/common';
 import * as crypto from 'crypto';
-import { rawEnv } from 'src/config';
+// using process.env directly (dotenv is loaded in config/index.ts)
 import { db } from 'src/main';
 import { ProxyOrderService } from 'src/modules/proxy/order/order.service';
 import { TransactionsService } from 'src/modules/transaction/transaction.service';
@@ -47,7 +47,7 @@ export type WebhookProcessResult = {
 
 @Injectable()
 export class WebhookService {
-  private securityKey = rawEnv.PAYMENTPOINT_SECRET || '';
+  private securityKey = process.env.PAYMENTPOINT_SECRET || '';
 
   constructor(
     private readonly transactionsService: TransactionsService,

@@ -4,7 +4,7 @@ import * as firebaseAdmin from 'firebase-admin';
 import { AllExceptionsFilter } from 'src/common/filters/all-exception-filter';
 import { setupSwagger } from 'src/swagger';
 import { AppModule } from './app.module';
-import { env, isDev, parseOrigins, rawEnv } from './config';
+import { env, isDev, parseOrigins } from './config';
 
 const filePath = env.SERVICE_ACCOUNT_PATH;
 // const filePath =
@@ -75,7 +75,7 @@ async function bootstrap() {
         callback(null, true);
         return;
       }
-      if (isDev && rawEnv.CORS_FALLBACK_ALLOW_ALL === '1') {
+      if (isDev && process.env.CORS_FALLBACK_ALLOW_ALL === '1') {
         console.warn(
           '[CORS] Fallback allowing origin (dev override):',
           cleaned,
