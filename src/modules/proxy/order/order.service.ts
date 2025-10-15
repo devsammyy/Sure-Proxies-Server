@@ -5,7 +5,7 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import axios, { AxiosInstance } from 'axios';
 import { DocumentSnapshot, FieldValue } from 'firebase-admin/firestore';
-import { env as cfg, rawEnv } from 'src/config';
+import { env as cfg } from 'src/config';
 import { db } from 'src/main';
 import { PaymentpointService } from 'src/modules/paymentpoint/paymentpoint.service';
 import {
@@ -32,24 +32,24 @@ export class ProxyOrderService {
     private readonly walletService: WalletService,
   ) {
     // Validate required environment variables
-    if (!rawEnv.PROXY_API_KEY || !rawEnv.PROXY_API_SECRET) {
+    if (!process.env.PROXY_API_KEY || !process.env.PROXY_API_SECRET) {
       console.warn(
         '⚠️  [PROXY API] Missing API credentials in environment variables',
       );
     }
 
     // Create axios instance with timeout and retry configuration
-    const timeout = parseInt(rawEnv.PROXY_API_TIMEOUT || '30000', 10);
+    const timeout = parseInt(process.env.PROXY_API_TIMEOUT || '30000', 10);
     this.axiosInstance = axios.create({
       timeout,
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'SureProxies/1.0',
-        ...(rawEnv.PROXY_API_KEY && {
-          'X-Api-Key': rawEnv.PROXY_API_KEY,
+        ...(process.env.PROXY_API_KEY && {
+          'X-Api-Key': process.env.PROXY_API_KEY,
         }),
-        ...(rawEnv.PROXY_API_SECRET && {
-          'X-Api-Secret': rawEnv.PROXY_API_SECRET,
+        ...(process.env.PROXY_API_SECRET && {
+          'X-Api-Secret': process.env.PROXY_API_SECRET,
         }),
       },
     });
@@ -1013,8 +1013,8 @@ export class ProxyOrderService {
           executePayload,
           {
             headers: {
-              'X-Api-Key': rawEnv.PROXY_API_KEY as string,
-              'X-Api-Secret': rawEnv.PROXY_API_SECRET as string,
+              'X-Api-Key': process.env.PROXY_API_KEY as string,
+              'X-Api-Secret': process.env.PROXY_API_SECRET as string,
             },
           },
         ),

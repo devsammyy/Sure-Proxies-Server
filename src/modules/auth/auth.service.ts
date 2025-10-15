@@ -6,7 +6,6 @@ import {
 import axios from 'axios';
 import { Request } from 'express';
 import * as admin from 'firebase-admin';
-import { rawEnv } from 'src/config';
 import { db, dbAuth } from 'src/main';
 import { TokenResponse } from 'src/modules/auth/auth.model';
 import { UserDoc, UserModel, UserRole } from '../user/user.model';
@@ -132,7 +131,7 @@ export class AuthService {
     refreshToken: string;
     expiresIn: string;
   }> {
-    const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${rawEnv.FIREBASE_API_KEY || ''}`;
+    const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${process.env.FIREBASE_API_KEY || ''}`;
     return await this.sendPostRequest(url, {
       email,
       password,

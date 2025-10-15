@@ -37,9 +37,6 @@ export const env: Env = {
 
 export const isDev = env.NODE_ENV !== 'production';
 
-// Raw access to process.env for keys not explicitly typed above.
-export const rawEnv: NodeJS.ProcessEnv = process.env;
-
 /**
  * Helper to split and sanitize comma-separated origins
  */
