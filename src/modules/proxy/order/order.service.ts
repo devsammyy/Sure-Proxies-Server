@@ -24,13 +24,63 @@ import { ProxyOrderModel } from './order.model';
 @Injectable()
 export class ProxyOrderService {
   private readonly apiBaseUrl = 'https://api.proxy-cheap.com/v2/order';
-  private readonly axiosInstance: AxiosInstance;
+  private axiosInstance?: AxiosInstance;
+  private providerEnabled = false;
 
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly paymentPointService: PaymentpointService,
     private readonly walletService: WalletService,
-  ) {}
+  ) {
+    // Initialize providerEnabled and axiosInstance
+    const hasKey = Boolean(process.env.PROXY_CHEAP_API_KEY);
+    const hasSecret = Boolean(process.env.PROXY_CHEAP_API_SECRET);
+    this.providerEnabled = hasKey && hasSecret;
+
+    const timeout = parseInt(process.env.PROXY_API_TIMEOUT || '30000', 10);
+    this.axiosInstance = axios.create({
+      timeout,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'SureProxies/1.0',
+        ...(process.env.PROXY_CHEAP_API_KEY && {
+          'X-Api-Key': process.env.PROXY_CHEAP_API_KEY,
+        }),
+        ...(process.env.PROXY_CHEAP_API_SECRET && {
+          'X-Api-Secret': process.env.PROXY_CHEAP_API_SECRET,
+        }),
+      },
+    });
+
+    this.axiosInstance.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (
+          error &&
+          (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED')
+        ) {
+          console.error('⚠️ [PROXY API] Request timeout:', {
+            url: error.config?.url,
+            method: error.config?.method,
+            timeout: error.config?.timeout,
+          });
+        }
+        return Promise.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      },
+    );
+
+    console.log(
+      `🔐 [PROXY API] credentials present: key=${hasKey}, secret=${hasSecret}, providerEnabled=${this.providerEnabled}`,
+    );
+    console.log(`🔧 [PROXY API] Initialized with ${timeout}ms timeout`);
+    if (!this.providerEnabled) {
+      console.warn(
+        '⚠️  [PROXY API] Missing PROXY_CHEAP_API_KEY or PROXY_CHEAP_API_SECRET in environment. Provider calls will return 503 until configured.',
+      );
+    }
+  }
 
   /** Retry logic with exponential backoff */
   private async retryRequest<T>(
@@ -89,8 +139,11 @@ export class ProxyOrderService {
   }> {
     const start = Date.now();
     try {
+      // Ensure axios instance exists before using
+      this.ensureAxiosInstance();
+
       await this.retryRequest(
-        () => this.axiosInstance.get(this.apiBaseUrl, { timeout: 5000 }),
+        () => this.axiosInstance!.get(this.apiBaseUrl, { timeout: 5000 }),
         1, // Only 1 attempt for health check
       );
       const latency = Date.now() - start;
@@ -231,16 +284,13 @@ export class ProxyOrderService {
         );
         throw new HttpException('User not found', HttpStatus.NOT_FOUND);
       }
-
-      console.log('[VIRTUAL ACCOUNT] User data:', userData);
-
       // Create virtual account via PaymentPoint API
       let virtualAccount;
       try {
         virtualAccount = await this.paymentPointService.createVirtualAccount({
-          email: userData?.email,
-          name: userData?.fullName,
-          phoneNumber: userData?.phoneNumber,
+          email: userData.email,
+          name: userData.fullName,
+          phoneNumber: userData.phoneNumber,
         });
         console.log(
           '[VIRTUAL ACCOUNT] PaymentPoint API response:',
@@ -306,13 +356,54 @@ export class ProxyOrderService {
     }
   }
 
+  /** Ensure axiosInstance is initialized (lazy-init) */
+  private ensureAxiosInstance() {
+    if (this.axiosInstance) return;
+    const timeout = parseInt(process.env.PROXY_API_TIMEOUT || '30000', 10);
+    this.axiosInstance = axios.create({
+      timeout,
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'SureProxies/1.0',
+        ...(process.env.PROXY_CHEAP_API_KEY && {
+          'X-Api-Key': process.env.PROXY_CHEAP_API_KEY,
+        }),
+        ...(process.env.PROXY_CHEAP_API_SECRET && {
+          'X-Api-Secret': process.env.PROXY_CHEAP_API_SECRET,
+        }),
+      },
+    });
+
+    this.axiosInstance.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (
+          error &&
+          (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED')
+        ) {
+          console.error('⚠️ [PROXY API] Request timeout:', {
+            url: error.config?.url,
+            method: error.config?.method,
+            timeout: error.config?.timeout,
+          });
+        }
+        return Promise.reject(
+          error instanceof Error ? error : new Error(String(error)),
+        );
+      },
+    );
+  }
+
   /** Fetch all proxy services */
   async getAvailableProxiesServices(): Promise<ProxyOrderModel[]> {
     try {
       console.log('🔍 [PROXY API] Fetching available proxy services...');
 
+      // Ensure axios instance exists before using
+      this.ensureAxiosInstance();
+
       const response = await this.retryRequest(() =>
-        this.axiosInstance.get(this.apiBaseUrl),
+        this.axiosInstance!.get(this.apiBaseUrl),
       );
 
       const services: ProxyOrderModel[] = response?.data?.services;
@@ -343,8 +434,11 @@ export class ProxyOrderService {
     try {
       console.log(`🔍 [PROXY API] Fetching options for service: ${serviceId}`);
 
+      // Ensure axios instance exists before using
+      this.ensureAxiosInstance();
+
       const response = await this.retryRequest(() =>
-        this.axiosInstance.post<ServiceDetailsResponseModel>(
+        this.axiosInstance!.post<ServiceDetailsResponseModel>(
           `${this.apiBaseUrl}/${serviceId}`,
           {
             planId: planId || null,
@@ -528,8 +622,11 @@ export class ProxyOrderService {
         payload,
       );
 
+      // Ensure axios instance exists before using
+      this.ensureAxiosInstance();
+
       const response = await this.retryRequest(() =>
-        this.axiosInstance.post<PriceResponseModel>(
+        this.axiosInstance!.post<PriceResponseModel>(
           `${this.apiBaseUrl}/${serviceId}/price`,
           payload,
         ),
@@ -960,9 +1057,10 @@ export class ProxyOrderService {
       );
 
       console.log('🚀 [FINALIZE] Executing proxy purchase with provider...');
+      this.ensureAxiosInstance();
 
       const executeResponse = await this.retryRequest(() =>
-        this.axiosInstance.post<Record<string, unknown>>(
+        this.axiosInstance!.post<Record<string, unknown>>(
           `${this.apiBaseUrl}/${pending.serviceId}/execute`,
           executePayload,
           {
