@@ -30,28 +30,7 @@ export class ProxyOrderService {
     private readonly transactionsService: TransactionsService,
     private readonly paymentPointService: PaymentpointService,
     private readonly walletService: WalletService,
-  ) {
-    // Add response interceptor for better error handling
-    this.axiosInstance.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (
-          error &&
-          (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED')
-        ) {
-          console.error('⚠️ [PROXY API] Request timeout:', {
-            url: error.config?.url,
-            method: error.config?.method,
-            timeout: error.config?.timeout,
-          });
-        }
-        // Ensure rejection reason is an Error
-        return Promise.reject(
-          error instanceof Error ? error : new Error(String(error)),
-        );
-      },
-    );
-  }
+  ) {}
 
   /** Retry logic with exponential backoff */
   private async retryRequest<T>(
