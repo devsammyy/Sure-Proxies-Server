@@ -1,12 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { ApiClient } from 'src/common/api/api-client';
+import { env } from 'src/config';
 
 @Injectable()
 export class PaymentpointService {
-  private readonly apiBaseUrl = process.env.PAYMENTPOINT_BASEURL!;
+  private readonly apiBaseUrl = env.SERVICE_ACCOUNT_PATH; // fallback if not set
 
-  private readonly paymentPointBusinessId =
-    process.env.PAYMENTPOINT_BUSINESS_ID;
+  private readonly paymentPointBusinessId = env.FRONTEND_BASE_DOMAIN || '';
 
   private readonly apiClient: ApiClient;
 
