@@ -1043,6 +1043,42 @@ export class ProxyOrderService {
           purchases: FieldValue.arrayUnion(purchaseRef.id) as any,
         });
 
+      // Map provider order id (if present) to our userId so we can claim ownership later
+      try {
+        const providerId =
+          (executeResponse.data && (executeResponse.data as any).id) ||
+          (executeResponse.data as any).orderId ||
+          null;
+
+        if (providerId) {
+          await db
+            .collection('provider_order_mappings')
+            .doc(String(providerId))
+            .set({
+              userId: pending.userId,
+              purchaseId: purchaseRef.id,
+              serviceId: pending.serviceId,
+              providerPayload: executeResponse.data,
+              createdAt: new Date(),
+            });
+
+          console.log(
+            '✅ [MAPPING] Mapped provider order id to user:',
+            providerId,
+          );
+        } else {
+          console.warn(
+            '⚠️ [MAPPING] No provider id found in execute response, skipping provider mapping',
+          );
+        }
+      } catch (mapErr) {
+        console.error(
+          '❌ [MAPPING] Failed to save provider mapping for purchase',
+          purchaseRef.id,
+          mapErr,
+        );
+      }
+
       // Delete pending purchase
       await pendingRef.delete();
 
