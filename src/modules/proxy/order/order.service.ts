@@ -5,7 +5,7 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import axios, { AxiosInstance } from 'axios';
 import { DocumentSnapshot, FieldValue } from 'firebase-admin/firestore';
-import { env as cfg } from 'src/config';
+import { env as cfg, isDev } from 'src/config';
 import { db } from 'src/main';
 import { PaymentpointService } from 'src/modules/paymentpoint/paymentpoint.service';
 import {
@@ -32,10 +32,18 @@ export class ProxyOrderService {
     private readonly walletService: WalletService,
   ) {
     // Validate required environment variables
-    if (!process.env.PROXY_API_KEY || !process.env.PROXY_API_SECRET) {
-      console.warn(
-        '⚠️  [PROXY API] Missing API credentials in environment variables',
-      );
+    const hasKey = Boolean(process.env.PROXY_API_KEY);
+    const hasSecret = Boolean(process.env.PROXY_API_SECRET);
+    console.log(
+      `🔐 [PROXY API] credentials present: key=${hasKey}, secret=${hasSecret}`,
+    );
+    if (!hasKey || !hasSecret) {
+      const msg = 'Missing PROXY_API_KEY or PROXY_API_SECRET in environment';
+      console.warn('⚠️  [PROXY API] %s', msg);
+      // In production we should fail fast so the problem is visible instead of continuing and getting 403s
+      if (!isDev) {
+        throw new Error(msg);
+      }
     }
 
     // Create axios instance with timeout and retry configuration
