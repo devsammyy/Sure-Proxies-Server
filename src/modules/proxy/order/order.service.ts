@@ -32,7 +32,7 @@ export class ProxyOrderService {
     private readonly walletService: WalletService,
   ) {
     // Validate required environment variables
-    const hasKey = Boolean(process.env.PROXY_API_KEY);
+    const hasKey = Boolean(process.env.PROXY_CHEAP_API_KEY);
     const hasSecret = Boolean(process.env.PROXY_API_SECRET);
     console.log(
       `🔐 [PROXY API] credentials present: key=${hasKey}, secret=${hasSecret}`,
@@ -53,11 +53,11 @@ export class ProxyOrderService {
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'SureProxies/1.0',
-        ...(process.env.PROXY_API_KEY && {
-          'X-Api-Key': process.env.PROXY_API_KEY,
+        ...(process.env.PROXY_CHEAP_API_KEY && {
+          'X-Api-Key': process.env.PROXY_CHEAP_API_KEY,
         }),
-        ...(process.env.PROXY_API_SECRET && {
-          'X-Api-Secret': process.env.PROXY_API_SECRET,
+        ...(process.env.PROXY_CHEAP_API_SECRET && {
+          'X-Api-Secret': process.env.PROXY_CHEAP_API_SECRET,
         }),
       },
     });
@@ -1021,8 +1021,8 @@ export class ProxyOrderService {
           executePayload,
           {
             headers: {
-              'X-Api-Key': process.env.PROXY_API_KEY as string,
-              'X-Api-Secret': process.env.PROXY_API_SECRET as string,
+              'X-Api-Key': process.env.PROXY_CHEAP_API_KEY as string,
+              'X-Api-Secret': process.env.PROXY_CHEAP_API_SECRET as string,
             },
           },
         ),
