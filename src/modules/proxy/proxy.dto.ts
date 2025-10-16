@@ -1,12 +1,43 @@
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
-  IsEnum,
   IsInt,
-  IsIP,
   IsOptional,
   IsString,
 } from 'class-validator';
+
+export class UptimePointDto {
+  @IsDateString()
+  date: string;
+
+  @IsOptional()
+  value: number | null;
+}
+
+export class UptimeDto {
+  @IsDateString()
+  updatedAt: string;
+
+  @IsArray()
+  data: UptimePointDto[];
+}
+
+export class TrafficPointDto {
+  @IsDateString()
+  date: string;
+
+  @IsInt()
+  value: number;
+}
+
+export class TrafficDto {
+  @IsDateString()
+  updatedAt: string;
+
+  @IsArray()
+  data: TrafficPointDto[];
+}
 
 export class AuthenticationDto {
   @IsArray()
@@ -20,59 +51,149 @@ export class AuthenticationDto {
   password: string;
 }
 
+export class ConnectionHostnamesDto {
+  [key: string]: string;
+}
+
 export class ConnectionDto {
-  @IsIP('4')
-  publicIp: string;
+  @IsOptional()
+  publicIp?: string | null;
 
+  @IsOptional()
+  connectIp?: string | null;
+
+  @IsOptional()
   @IsString()
-  connectIp: string;
+  ipVersion?: string;
 
-  @IsInt()
-  httpPort: number;
+  @IsOptional()
+  lastIp?: string | null;
 
-  @IsInt()
-  httpsPort: number;
+  @IsOptional()
+  httpPort?: number | null;
 
-  @IsInt()
-  socks5Port: number;
+  @IsOptional()
+  httpsPort?: number | null;
+
+  @IsOptional()
+  socks5Port?: number | null;
+
+  @IsOptional()
+  hostnames?: ConnectionHostnamesDto[];
 }
 
 export class MetadataDto {
+  @IsOptional()
+  ispName?: string | null;
+
+  @IsOptional()
+  orderId?: string;
+}
+
+export class BandwidthDto {
+  @IsOptional()
+  total?: number | null;
+
+  @IsOptional()
+  used?: number | null;
+
+  @IsOptional()
+  @IsDateString()
+  updatedAt?: string;
+}
+
+export class UplinkOrThreadsDto {
+  @IsInt()
+  value: number;
+
   @IsString()
-  ispName: string;
+  label: string;
 }
 
 export class ProxyDto {
-  @IsString()
-  id: string;
+  // top-level metadata often returned by provider
+  @IsOptional()
+  @IsDateString()
+  activatedAt?: string;
 
-  @IsEnum(['ACTIVE', 'CANCELED', 'PENDING', 'EXPIRED'], {
-    message: 'status must be one of: ACTIVE, CANCELED, PENDING, EXPIRED',
-  })
+  @IsOptional()
+  @IsDateString()
+  canceledAt?: string | null;
+
+  @IsOptional()
+  @IsDateString()
+  updatedAt?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  autoExtendEnabled?: boolean;
+
+  @IsOptional()
+  autoExtendBandwidthAmount?: number | null;
+
+  @IsOptional()
+  @IsDateString()
+  autoExtendAt?: string | null;
+
+  @IsArray()
+  routes: any[];
+
+  @IsString()
+  type: string;
+
+  @IsString()
+  plan: string;
+
+  @IsOptional()
+  uptime?: UptimeDto;
+
+  @IsOptional()
+  traffic?: TrafficDto;
+
+  // provider id is numeric in example but can be string; allow both
+  id: number | string;
+
   status: string;
 
-  @IsEnum(['RESIDENTIAL', 'DATACENTER', 'MOBILE'], {
-    message: 'networkType must be one of: RESIDENTIAL, DATACENTER, MOBILE',
-  })
-  networkType: string;
+  networkType?: string;
 
-  authentication: AuthenticationDto;
+  authentication?: AuthenticationDto;
 
-  connection: ConnectionDto;
+  connection?: ConnectionDto;
 
-  @IsEnum(['HTTP', 'HTTPS', 'SOCKS5'], {
-    message: 'proxyType must be one of: HTTP, HTTPS, SOCKS5',
-  })
-  proxyType: string;
+  proxyType?: string;
 
+  @IsOptional()
   @IsDateString()
-  createdAt: string;
+  createdAt?: string;
 
+  @IsOptional()
   @IsDateString()
-  expiresAt: string;
+  expiresAt?: string;
 
   @IsOptional()
   metadata?: MetadataDto;
+
+  @IsOptional()
+  bandwidth?: BandwidthDto;
+
+  @IsOptional()
+  uplinkSpeed?: UplinkOrThreadsDto;
+
+  @IsOptional()
+  threads?: UplinkOrThreadsDto;
+
+  @IsOptional()
+  location?: { countryCode?: string | null; regionCode?: string | null };
+
+  @IsOptional()
+  note?: string | null;
+
+  @IsArray()
+  actions: string[];
+
+  @IsOptional()
+  maintenanceWindows?: any[];
 }
 
 export class BandwidthPriceAfterCalcDto {
@@ -85,25 +206,18 @@ export class BandwidthPriceAfterCalcDto {
 }
 
 export class ProtocolDto {
-  @IsEnum(['HTTP', 'HTTPS', 'SOCKS5'], {
-    message: 'currentType must be one of: HTTP, HTTPS, SOCKS5',
-  })
+  @IsString()
   currentType: string;
 
   @IsArray()
-  @IsEnum(['HTTP', 'SOCKS5'], { each: true })
   availableTypes: string[];
 }
 
 export class AuthenticationTypeDto {
-  @IsEnum(['IP_WHITELIST', 'USERNAME_PASSWORD'], {
-    message:
-      'currentAuthenticationType must be one of: IP_WHITELIST, USERNAME_PASSWORD',
-  })
+  @IsString()
   currentAuthenticationType: string;
 
   @IsArray()
-  @IsEnum(['IP_WHITELIST', 'USERNAME_PASSWORD'], { each: true })
   availableAuthenticationTypes: string[];
 }
 
