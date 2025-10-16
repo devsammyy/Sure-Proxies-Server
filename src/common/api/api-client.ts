@@ -1,8 +1,7 @@
 import axios from 'axios';
-import { env } from '../../config';
 
 export class ApiClient {
-  apiKey = env.SERVICE_ACCOUNT_PATH; // fallback placeholder if not set
+  apiKey = process.env.PROXY_CHEAP_API_KEY; // fallback placeholder if not set
   apiSecretKey = process.env.PROXY_CHEAP_API_SECRET || '';
   paymentPointSecretKey = process.env.PAYMENTPOINT_SECRET || '';
   paymentPointApiKey = process.env.PAYMENTPOINT_APIKEY || '';
@@ -26,6 +25,8 @@ export class ApiClient {
           'Service temporarily unavailable. Please try again later.',
         );
       }
+
+      console.log(response.data, 'Response for axios');
       return response.data;
     } catch (error) {
       console.error(`Error fetching ${endpoint}: `, error);

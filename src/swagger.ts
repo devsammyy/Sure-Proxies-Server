@@ -10,9 +10,6 @@ export function setupSwagger(app: INestApplication) {
       {
         type: 'http',
         scheme: 'bearer',
-        bearerFormat: 'JWT',
-        in: 'header',
-        name: 'Authorization',
       },
       'access-token',
     )
@@ -20,9 +17,5 @@ export function setupSwagger(app: INestApplication) {
 
   const document = SwaggerModule.createDocument(app, config);
 
-  SwaggerModule.setup('api', app, document, {
-    swaggerOptions: {
-      persistAuthorization: true,
-    },
-  });
+  SwaggerModule.setup('api', app, document);
 }

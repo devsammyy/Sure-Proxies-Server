@@ -26,6 +26,32 @@ export class ProxyOrderService {
   private readonly apiBaseUrl = 'https://api.proxy-cheap.com/v2/order';
   private axiosInstance?: AxiosInstance;
   private providerEnabled = false;
+
+  /** Normalize packageId into a string if possible (accepts string, object, array) */
+  private normalizePackageId(raw: any): string | null {
+    if (raw == null) return null;
+    // Array: pick first usable entry
+    if (Array.isArray(raw)) {
+      if (raw.length === 0) return null;
+      const first = raw[0];
+      return this.normalizePackageId(first);
+    }
+    // Object: try common id fields
+    if (typeof raw === 'object') {
+      if (raw.id) return String(raw.id);
+      if (raw.packageId) return String(raw.packageId);
+      if (raw.value) return String(raw.value);
+      // If object has a single string property, return it
+      const keys = Object.keys(raw);
+      for (const k of keys) {
+        if (typeof raw[k] === 'string' && raw[k].trim()) return raw[k].trim();
+      }
+      return null;
+    }
+    // Primitive
+    const s = String(raw).trim();
+    return s.length > 0 ? s : null;
+  }
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly paymentPointService: PaymentpointService,
@@ -831,6 +857,8 @@ export class ProxyOrderService {
         }
       }
       if (model.traffic !== undefined) options.traffic = model.traffic;
+      if ((model as any).packageId !== undefined)
+        options.packageId = this.normalizePackageId((model as any).packageId);
       if (model.country !== undefined) options.country = model.country;
       if (model.ispId !== undefined) options.ispId = model.ispId;
 
@@ -1087,6 +1115,18 @@ export class ProxyOrderService {
       if (pending.options.ispId !== undefined)
         executePayload.ispId = pending.options.ispId;
 
+      // Normalize and validate packageId: provider returns IS_BLANK when missing
+      if ((pending.options as any).packageId !== undefined) {
+        const pkg = this.normalizePackageId((pending.options as any).packageId);
+        if (!pkg) {
+          throw new HttpException(
+            { message: 'packageId is required', code: 'IS_BLANK' },
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+        executePayload.packageId = pkg;
+      }
+
       console.log(
         '🚀 [FINALIZE] Execute payload:',
         JSON.stringify(executePayload, null, 2),
@@ -1109,16 +1149,18 @@ export class ProxyOrderService {
       );
 
       // construct and save purchase
+      // Build purchase object but omit undefined fields (Firestore rejects undefined)
       const purchase: PurchaseOrderModel = {
         id: '',
         userId: pending.userId,
         serviceId: pending.serviceId,
-        planId: pending.planId,
+        // planId is optional; only include when defined
+        ...(pending.planId !== undefined && { planId: pending.planId }),
         profitPrice: pending.pricePaid,
         status: 'active',
         createdAt: new Date(),
         details: executeResponse.data,
-      };
+      } as PurchaseOrderModel;
 
       const purchaseRef = await db.collection('purchases').add(purchase);
       purchase.id = purchaseRef.id;
@@ -1142,21 +1184,66 @@ export class ProxyOrderService {
           null;
 
         if (providerId) {
+          // Only set defined fields to avoid Firestore undefined errors
+          const mappingData: Record<string, unknown> = {
+            userId: pending.userId,
+            purchaseId: purchaseRef.id,
+            serviceId: pending.serviceId,
+            providerPayload: executeResponse.data || null,
+            createdAt: new Date(),
+          };
+
           await db
             .collection('provider_order_mappings')
             .doc(String(providerId))
-            .set({
-              userId: pending.userId,
-              purchaseId: purchaseRef.id,
-              serviceId: pending.serviceId,
-              providerPayload: executeResponse.data,
-              createdAt: new Date(),
-            });
+            .set(mappingData);
+
+          // Auto-claim: attach providerOrderId and payload to the purchase document
+          try {
+            await purchaseRef.set(
+              {
+                providerOrderId: String(providerId),
+                providerPayload: executeResponse.data || null,
+                updatedAt: new Date(),
+              },
+              { merge: true },
+            );
+            console.log(
+              '✅ [AUTO-CLAIM] Attached providerOrderId to purchase:',
+              purchaseRef.id,
+            );
+          } catch (claimErr) {
+            console.error(
+              '❌ [AUTO-CLAIM] Failed to attach providerOrderId to purchase:',
+              claimErr,
+            );
+          }
 
           console.log(
             '✅ [MAPPING] Mapped provider order id to user:',
             providerId,
           );
+
+          // Auto-claim: attach provider id and payload directly to the purchase document
+          try {
+            await purchaseRef.set(
+              {
+                providerOrderId: String(providerId),
+                providerPayload: executeResponse.data || null,
+                updatedAt: new Date(),
+              },
+              { merge: true },
+            );
+            console.log(
+              '✅ [AUTO-CLAIM] Attached providerOrderId to purchase:',
+              purchaseRef.id,
+            );
+          } catch (attachErr) {
+            console.error(
+              '❌ [AUTO-CLAIM] Failed to attach provider id to purchase:',
+              attachErr,
+            );
+          }
         } else {
           console.warn(
             '⚠️ [MAPPING] No provider id found in execute response, skipping provider mapping',

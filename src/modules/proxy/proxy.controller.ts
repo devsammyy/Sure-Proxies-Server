@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Req } from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -14,22 +14,37 @@ import {
   ProtocolDto,
   ProxyDto,
 } from 'src/modules/proxy/proxy.dto';
+import { ApAuthGuard } from '../auth/auth-guard.decorator';
+import { UserRole } from '../user/user.model';
 import { ProxyService } from './proxy.service';
 
+interface AuthenticatedRequest extends Request {
+  user?: {
+    uid?: string;
+    [key: string]: any;
+  };
+}
+
+@ApAuthGuard(UserRole.USER)
+@ApiBearerAuth('access-token')
 @ApiTags('Proxies')
-@ApiBearerAuth()
 @Controller('proxies')
 export class ProxyController {
   constructor(private readonly proxyService: ProxyService) {}
 
   @Get()
-  @ApiOperation({ summary: 'Get list of active proxies' })
+  @ApiOperation({ summary: 'Get list of active proxies (user-specific)' })
   @ApiResponse({
     status: 200,
-    description: 'Available active proxies',
+    description: 'Available active proxies for the authenticated user',
   })
-  async getListOfActiveProxies() {
-    return await this.proxyService.getListOfActiveProxies();
+  async getListOfActiveProxies(
+    @Req() req: AuthenticatedRequest,
+  ): Promise<ProxyDto[]> {
+    // req.user is populated by the ApAuthGuard decorator
+    const userId = req?.user?.uid;
+    console.log(userId);
+    return await this.proxyService.getListOfActiveProxies(userId);
   }
 
   @Get(':id')
@@ -81,6 +96,29 @@ export class ProxyController {
     @Body('data') data: ExtendProxyDtoInput,
   ) {
     return await this.proxyService.extendProxyPeriod(id, data);
+  }
+
+  @Post(':id/auto-extend')
+  @ApiOperation({ summary: 'Enable or disable auto-extend for a proxy' })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        enabled: { type: 'boolean' },
+      },
+    },
+  })
+  async setAutoExtend(
+    @Param('id') id: string,
+    @Body('enabled') enabled: boolean,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const userId = req?.user?.uid;
+    return await this.proxyService.setAutoExtendForPurchase(
+      id,
+      userId,
+      !!enabled,
+    );
   }
 
   @Post(':id/buy-bandwidth')

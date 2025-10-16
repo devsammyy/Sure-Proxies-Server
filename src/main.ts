@@ -44,6 +44,8 @@ async function bootstrap() {
     'http://localhost:3000',
     'https://sure-proxies.vercel.app',
     'http://127.0.0.1:3000',
+    'http://localhost:3002',
+
     sanitize(env.FRONTEND_URL), // primary frontend
     ...extraOrigins,
   ]
