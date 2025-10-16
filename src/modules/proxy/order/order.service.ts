@@ -26,13 +26,12 @@ export class ProxyOrderService {
   private readonly apiBaseUrl = 'https://api.proxy-cheap.com/v2/order';
   private axiosInstance?: AxiosInstance;
   private providerEnabled = false;
-
   constructor(
     private readonly transactionsService: TransactionsService,
     private readonly paymentPointService: PaymentpointService,
     private readonly walletService: WalletService,
   ) {
-    // Initialize providerEnabled and axiosInstance
+    // Initialize providerEnabled and default axios instance
     const hasKey = Boolean(process.env.PROXY_CHEAP_API_KEY);
     const hasSecret = Boolean(process.env.PROXY_CHEAP_API_SECRET);
     this.providerEnabled = hasKey && hasSecret;
@@ -821,7 +820,16 @@ export class ProxyOrderService {
       const options: any = {};
       if (model.quantity !== undefined) options.quantity = model.quantity;
       if (model.period !== undefined) options.period = model.period;
-      if (model.autoExtend !== undefined) options.autoExtend = model.autoExtend;
+      if (model.autoExtend !== undefined) {
+        // Normalize autoExtend to boolean for storage/provider
+        const ae = model.autoExtend as any;
+        if (typeof ae === 'boolean') options.autoExtend = ae;
+        else if (ae && typeof ae === 'object') {
+          options.autoExtend = Boolean(ae.isEnabled ?? ae.enabled ?? true);
+        } else {
+          options.autoExtend = Boolean(ae);
+        }
+      }
       if (model.traffic !== undefined) options.traffic = model.traffic;
       if (model.country !== undefined) options.country = model.country;
       if (model.ispId !== undefined) options.ispId = model.ispId;
@@ -1029,27 +1037,55 @@ export class ProxyOrderService {
       // Build payload, only including defined values
       const executePayload: any = {};
 
-      if (pending.planId !== undefined) {
-        executePayload.planId = pending.planId;
-      }
-      if (pending.options.quantity !== undefined) {
+      // Map pending fields to provider expected schema
+      if (pending.planId !== undefined) executePayload.planId = pending.planId;
+      if (pending.options.quantity !== undefined)
         executePayload.quantity = pending.options.quantity;
-      }
+
+      // Provider typically expects period as { unit: 'months'|'days'|'years', value: number }
       if (pending.options.period !== undefined) {
-        executePayload.period = pending.options.period;
+        const p = pending.options.period;
+        // If frontend stored period as {value, unit} keep as-is. If only value provided, default unit to 'months'.
+        if (p && typeof p === 'object' && 'value' in p) {
+          executePayload.period = p;
+        } else if (typeof p === 'number') {
+          executePayload.period = { value: p, unit: 'months' };
+        } else {
+          // Fallback: attempt to coerce
+          try {
+            const parsed = JSON.parse(String(p));
+            if (parsed && parsed.value) executePayload.period = parsed;
+          } catch {
+            // ignore and let provider validate
+            executePayload.period = p;
+          }
+        }
       }
+
+      // Ensure autoExtend is a boolean (provider may reject {isEnabled: true} shape)
       if (pending.options.autoExtend !== undefined) {
-        executePayload.autoExtend = pending.options.autoExtend;
+        const ae = pending.options.autoExtend as any;
+        if (typeof ae === 'boolean') executePayload.autoExtend = ae;
+        else if (ae && typeof ae === 'object') {
+          // Support legacy { isEnabled: boolean } or { enabled: boolean }
+          if (ae.isEnabled !== undefined) {
+            executePayload.autoExtend = Boolean(ae.isEnabled);
+          } else if (ae.enabled !== undefined) {
+            executePayload.autoExtend = Boolean(ae.enabled);
+          } else {
+            executePayload.autoExtend = Boolean(ae);
+          }
+        } else {
+          executePayload.autoExtend = Boolean(ae);
+        }
       }
-      if (pending.options.traffic !== undefined) {
+
+      if (pending.options.traffic !== undefined)
         executePayload.traffic = pending.options.traffic;
-      }
-      if (pending.options.country !== undefined) {
+      if (pending.options.country !== undefined)
         executePayload.country = pending.options.country;
-      }
-      if (pending.options.ispId !== undefined) {
+      if (pending.options.ispId !== undefined)
         executePayload.ispId = pending.options.ispId;
-      }
 
       console.log(
         '🚀 [FINALIZE] Execute payload:',
@@ -1142,16 +1178,30 @@ export class ProxyOrderService {
     } catch (err: unknown) {
       console.error('finalizePurchase error for', transactionId, err);
 
+      // Capture provider response body when available (helps debug 422)
+      const providerData = (err as any)?.response?.data;
       const msg = (err instanceof Error ? err.message : String(err)).slice(
         0,
         500,
       );
 
-      await db.collection('transactions').doc(transactionId).update({
-        finalizeError: msg,
-        finalized: false,
-        finalizedAt: new Date(),
-      });
+      try {
+        await db
+          .collection('transactions')
+          .doc(transactionId)
+          .update({
+            finalizeError: msg,
+            finalizeErrorProviderBody: providerData || null,
+            finalized: false,
+            finalizedAt: new Date(),
+          });
+      } catch (dbErr) {
+        console.error(
+          'Failed to record finalize error in transaction doc:',
+          dbErr,
+        );
+      }
+
       throw err;
     }
   }
