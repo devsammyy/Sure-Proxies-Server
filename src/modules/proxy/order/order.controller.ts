@@ -117,6 +117,41 @@ export class ProxyOrderController {
     return this.proxyOrderService.getUserPurchases(userId);
   }
 
+  @Get('my-expiring-soon')
+  @ApAuthGuard(UserRole.USER)
+  @ApiOperation({
+    summary: 'Get purchases expiring soon for the logged-in user',
+  })
+  async getMyExpiringSoon(
+    @Req() req: AuthenticatedRequest,
+  ): Promise<PurchaseOrderModel[]> {
+    const userId = req.user.uid;
+    return this.proxyOrderService.getExpiringSoonPurchases(userId);
+  }
+
+  @Get('my-inactive')
+  @ApAuthGuard(UserRole.USER)
+  @ApiOperation({
+    summary: 'Get inactive (expired) purchases for the logged-in user',
+  })
+  async getMyInactive(
+    @Req() req: AuthenticatedRequest,
+  ): Promise<PurchaseOrderModel[]> {
+    const userId = req.user.uid;
+    return this.proxyOrderService.getInactivePurchases(userId);
+  }
+
+  @Get('my-total-spent')
+  @ApAuthGuard(UserRole.USER)
+  @ApiOperation({ summary: 'Get total spent by the logged-in user' })
+  async getMyTotalSpent(
+    @Req() req: AuthenticatedRequest,
+  ): Promise<{ totalSpent: number }> {
+    const userId = req.user.uid;
+    const totalSpent = await this.proxyOrderService.getTotalSpent(userId);
+    return { totalSpent };
+  }
+
   // --------------------- ADMIN ROUTES --------------------- //
 
   @Get('admin/all-purchases')
