@@ -42,9 +42,10 @@ export class ProxyOrderService {
       if (raw.packageId) return String(raw.packageId);
       if (raw.value) return String(raw.value);
       // If object has a single string property, return it
-      const keys = Object.keys(raw);
+      const keys = Object.keys(raw as Record<string, unknown>);
       for (const k of keys) {
-        if (typeof raw[k] === 'string' && raw[k].trim()) return raw[k].trim();
+        const val = (raw as Record<string, unknown>)[k];
+        if (typeof val === 'string' && val.trim()) return val.trim();
       }
       return null;
     }
@@ -1298,6 +1299,61 @@ export class ProxyOrderService {
       .where('userId', '==', userId)
       .get();
     return purchasesSnap.docs.map((doc) => doc.data() as PurchaseOrderModel);
+  }
+
+  /** Get purchases for a user that are expiring soon (active, expires in <= 7 days) */
+  async getExpiringSoonPurchases(
+    userId: string,
+  ): Promise<PurchaseOrderModel[]> {
+    const now = new Date();
+    const soon = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const purchasesSnap = await db
+      .collection('purchases')
+      .where('userId', '==', userId)
+      .where('status', '==', 'active')
+      .get();
+    return purchasesSnap.docs
+      .map((doc) => doc.data() as PurchaseOrderModel)
+      .filter((p) => {
+        if (!p.details || !p.details.expiresAt) return false;
+        const exp = new Date(p.details.expiresAt as string);
+        return exp > now && exp <= soon;
+      });
+  }
+
+  /** Get purchases for a user that are inactive (expired) */
+  async getInactivePurchases(userId: string): Promise<PurchaseOrderModel[]> {
+    const purchasesSnap = await db
+      .collection('purchases')
+      .where('userId', '==', userId)
+      .where('status', '==', 'expired')
+      .get();
+    return purchasesSnap.docs.map((doc) => doc.data() as PurchaseOrderModel);
+  }
+
+  /** Get total spent by a user (sum of profitPrice for all purchases) */
+  /** Get total spent by a user (returns amount in NGN).
+   * Notes:
+   * - purchases store `profitPrice` in USD (provider price). This method
+   *   sums the stored USD values and converts the total to NGN using the
+   *   configured exchange rate (from getExchangeRate()).
+   * - We return a rounded NGN integer to match frontend expectations.
+   */
+  async getTotalSpent(userId: string): Promise<number> {
+    const purchasesSnap = await db
+      .collection('purchases')
+      .where('userId', '==', userId)
+      .get();
+
+    // Sum USD amounts (profitPrice) stored on each purchase
+    const totalUsd = purchasesSnap.docs
+      .map((doc) => doc.data() as PurchaseOrderModel)
+      .reduce((sum, p) => sum + (Number(p.profitPrice) || 0), 0);
+
+    // Convert to NGN using cached/external exchange rate
+    const exchangeRate = await this.getExchangeRate(); // NGN per 1 USD
+    const totalNgn = Math.round(totalUsd * exchangeRate);
+    return totalNgn;
   }
 
   /** Admin: Get all purchases */
