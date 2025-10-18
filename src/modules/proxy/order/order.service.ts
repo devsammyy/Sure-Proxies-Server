@@ -508,10 +508,8 @@ export class ProxyOrderService {
       }
 
       // Heuristic classification: widen support without hardcoding every id
-      const requiresTraffic =
-        /rotating/.test(normalizedId) &&
-        (normalizedId.includes('mobile') ||
-          normalizedId.includes('residential'));
+      // Rotating mobile/residential support removed — do not require traffic.
+      const requiresTraffic = false;
       // Any static (non-rotating) ipv6 variant (datacenter or residential) requires packageId + period (country is optional)
       const requiresPackageCountry =
         normalizedId.includes('ipv6') &&
